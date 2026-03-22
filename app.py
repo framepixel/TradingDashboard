@@ -1,13 +1,16 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import requests
+import json
 from datetime import datetime, timezone, time as dt_time
 from data_fetcher import (
     fetch_tradfi_data, 
     fetch_top_binance_movers, 
     fetch_ohlcv_data,
     fetch_top_stock_movers,
-    fetch_stock_ohlcv_data
+    fetch_stock_ohlcv_data,
+    fetch_market_news
 )
 from technical_analysis import calculate_indicators, analyze_strategy
 from ai_agent import generate_ai_trade_idea
@@ -48,6 +51,17 @@ def main():
     
     st.sidebar.markdown("---")
     st.sidebar.markdown(f"**Status:** {get_market_status()}")
+    st.sidebar.markdown("---")
+    
+    # -----------------------------
+    # WEBHOOK SETTINGS
+    # -----------------------------
+    with st.sidebar.expander("🔔 Alert Settings"):
+        webhook_url = st.text_input("Discord Webhook URL", value=st.session_state.get("discord_webhook", ""), type="password")
+        if webhook_url != st.session_state.get("discord_webhook", ""):
+            st.session_state.discord_webhook = webhook_url
+        st.session_state.webhook_active = st.checkbox("Enable Discord Alerts", value=st.session_state.get("webhook_active", False))
+
     st.sidebar.markdown("---")
     
     # -----------------------------
@@ -173,7 +187,18 @@ def main():
             st.info(f"No assets meet your minimum confidence score of {min_score}.")
             return
 
-        tab1, tab2, tab3, tab4 = st.tabs(["List View", "🚨 Alerts & Breakouts", "📈 Interactive Charts", "🧠 AI Ideas"])
+        # Styling function for dataframe
+        def color_score(val):
+            color = 'rgba(144, 238, 144, 0.2)' if val >= 50 else 'rgba(255, 165, 0, 0.2)' if val >= 30 else 'rgba(240, 128, 128, 0.2)'
+            return f'background-color: {color}'
+        
+        def color_rsi(val):
+            color = 'rgba(240, 128, 128, 0.2)' if val >= 70 else 'rgba(144, 238, 144, 0.2)' if val <= 30 else ''
+            return f'background-color: {color}'
+
+        styled_df = details_df.style.map(color_score, subset=['Score']).map(color_rsi, subset=['RSI'])
+
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["List View", "🚨 Alerts & Breakouts", "📈 Interactive Charts", "🧠 AI Ideas", "📰 Latest News"])
         link_config = {"Chart": st.column_config.LinkColumn("Chart", display_text="📈 View")}
         
         # Throw a toast notification for top alerts
@@ -181,14 +206,25 @@ def main():
             alert_count = len(details_df[(details_df['Breakout']) | (details_df['Vol Anomaly'])])
             if alert_count > 0:
                 st.toast(f"🚨 {alert_count} active setups found in {timeframe} timeframe for {'Crypto' if is_crypto else 'Stocks'}!")
+                
+                # Check webhook
+                webhook_url = st.session_state.get("discord_webhook", "")
+                if webhook_url and st.session_state.get("webhook_active", False):
+                    # Prevent spamming the webhook
+                    try:
+                        message = f"**Trading Dashboard Alert!** 🚨\nFound {alert_count} active setups for {'Crypto' if is_crypto else 'Stocks'} on the `{timeframe}` timeframe."
+                        requests.post(webhook_url, json={"content": message})
+                    except:
+                        pass
 
         with tab1:
-            st.dataframe(details_df, column_config=link_config, width='stretch', hide_index=True)
+            st.dataframe(styled_df, column_config=link_config, use_container_width=True, hide_index=True)
             
         with tab2:
             action_df = details_df[(details_df['Vol Anomaly']) | (details_df['Breakout']) | (details_df['Pullback'])]
             if not action_df.empty:
-                st.dataframe(action_df, column_config=link_config, width='stretch', hide_index=True)
+                styled_action_df = action_df.style.map(color_score, subset=['Score']).map(color_rsi, subset=['RSI'])
+                st.dataframe(styled_action_df, column_config=link_config, use_container_width=True, hide_index=True)
             else:
                 st.info("No active setups detected.")
             
@@ -208,7 +244,7 @@ def main():
                         if 'VWAP' in df_plot:
                             fig.add_trace(go.Scatter(x=df_plot['timestamp'], y=df_plot['VWAP'], line=dict(color='orange', width=1), name='VWAP'))
                         fig.update_layout(height=400, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
-                        st.plotly_chart(fig, width='stretch')
+                        st.plotly_chart(fig, use_container_width=True)
                         
         with tab4:
             st.subheader("💡 AI Generated Trade Summaries (Top Setups)")
@@ -218,7 +254,7 @@ def main():
             if setup_candidates.empty:
                 setup_candidates = details_df.head(5) # fallback to top gainers
                 
-            cols = st.columns(len(setup_candidates))
+            cols = st.columns(len(setup_candidates) if len(setup_candidates) > 0 else 1)
             for idx, (_, row) in enumerate(setup_candidates.iterrows()):
                 with cols[idx]:
                     sym = row['Symbol']
@@ -237,6 +273,21 @@ def main():
                                 idea = generate_ai_trade_idea(row)
                                 st.session_state.ai_ideas[sym] = idea
                                 st.rerun()
+                                
+        with tab5:
+            st.subheader(f"📰 Live News Feed ({'Crypto is not supported yet' if is_crypto else 'Stocks'})")
+            if not is_crypto:
+                top_sym = details_df.iloc[0]['Symbol'] if not details_df.empty else "SPY"
+                st.markdown(f"**Latest news for {top_sym} (Top Mover):**")
+                
+                news_items = fetch_market_news(top_sym)
+                if news_items:
+                    for item in news_items:
+                        with st.expander(f"{item['Time']} | {item['Title']}"):
+                            st.write(f"Source: {item['Publisher']}")
+                            st.markdown(f"[Read Full Article]({item['Link']})")
+                else:
+                    st.info(f"No recent news found for {top_sym}.")
 
     with asset_tabs[0]:
         render_movers_section(fetch_top_binance_movers, fetch_ohlcv_data, '24h Vol (USDT)', is_crypto=True)
@@ -294,6 +345,15 @@ def main():
         m1.metric("Total Trades Logged", len(st.session_state.trades))
         m2.metric("Total P&L ($)", f"${total_pnl:.2f}")
         m3.metric("Win Rate", f"{win_rate:.1f}%")
+        
+        # Export to CSV
+        csv = st.session_state.trades.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Trade Journal as CSV",
+            data=csv,
+            file_name='trade_journal.csv',
+            mime='text/csv',
+        )
 
 if __name__ == "__main__":
     main()

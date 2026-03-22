@@ -135,3 +135,36 @@ def fetch_stock_ohlcv_data(symbol, timeframe='5m', limit=300):
         return df.tail(limit)
     except Exception as e:
         return None
+
+@st.cache_data(ttl=300)
+def fetch_market_news(symbol="SPY"):
+    """Fetch the latest market news from Yahoo Finance for a specific ticker to gauge sentiment"""
+    try:
+        ticker = yf.Ticker(symbol)
+        news = ticker.news
+        formatted_news = []
+        for item in news[:5]: # Get top 5 news items
+            # Yahoo Finance sometimes nests the article details inside a 'content' key
+            content = item.get("content", item)
+            
+            # Extract fields with safe fallbacks
+            title = content.get("title", "No Title")
+            publisher = content.get("provider", {}).get("displayName", "Unknown")
+            link = content.get("clickThroughUrl", {}).get("url", content.get("canonicalUrl", {}).get("url", "#"))
+            timestamp = content.get("pubDate", "")
+            
+            if timestamp:
+                time_str = pd.to_datetime(timestamp).strftime("%Y-%m-%d %H:%M")
+            else:
+                # Fallback for old API format which used providerPublishTime
+                time_str = pd.to_datetime(content.get("providerPublishTime", 0), unit='s').strftime("%Y-%m-%d %H:%M")
+
+            formatted_news.append({
+                "Title": title,
+                "Publisher": publisher,
+                "Link": link,
+                "Time": time_str
+            })
+        return formatted_news
+    except Exception as e:
+        return []

@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from datetime import datetime, timezone, time as dt_time
 from data_fetcher import (
     fetch_tradfi_data, 
     fetch_top_binance_movers, 
@@ -24,6 +25,19 @@ try:
 except ImportError:
     pass
 
+def get_market_status():
+    """Check if US Markets are open"""
+    now = datetime.now(timezone.utc)
+    # US Market Hours (9:30 AM - 4:00 PM ET) roughly 13:30 to 20:00 UTC during daylight saving (or 14:30 to 21:00 std)
+    # Simplified approximation for general awareness
+    us_market_open = dt_time(13, 30)
+    us_market_close = dt_time(20, 0)
+    
+    if us_market_open <= now.time() <= us_market_close and now.weekday() < 5:
+        return "🟢 US Markets: OPEN"
+    else:
+        return "🔴 US Markets: CLOSED"
+
 # ==========================================
 # DASHBOARD UI
 # ==========================================
@@ -31,6 +45,43 @@ def main():
     st.sidebar.title("⚙️ Settings")
     timeframe = st.sidebar.radio("Select Timeframe:", ["1m", "5m", "15m", "1h", "1d"], index=1)
     
+    st.sidebar.markdown("---")
+    st.sidebar.markdown(f"**Status:** {get_market_status()}")
+    st.sidebar.markdown("---")
+    
+    # -----------------------------
+    # WATCHLIST PERSISTENCE
+    # -----------------------------
+    if "watchlist" not in st.session_state:
+        st.session_state.watchlist = ["AAPL", "BTC/USDT", "NVDA"]
+
+    st.sidebar.title("⭐ My Watchlist")
+    new_symbol = st.sidebar.text_input("Add Symbol", placeholder="ETH/USDT or TSLA").upper()
+    if st.sidebar.button("➕ Add") and new_symbol:
+        if new_symbol not in st.session_state.watchlist:
+            st.session_state.watchlist.append(new_symbol)
+            st.toast(f"Added {new_symbol} to Watchlist!")
+    
+    st.sidebar.markdown("### Current Watchlist")
+    for sym in st.session_state.watchlist:
+        cols = st.sidebar.columns([3, 1])
+        cols[0].text(sym)
+        if cols[1].button("✖", key=f"del_{sym}"):
+            st.session_state.watchlist.remove(sym)
+            st.rerun()
+
+    # -----------------------------
+    # TRADE JOURNAL INITIALIZATION
+    # -----------------------------
+    if "trades" not in st.session_state:
+        st.session_state.trades = pd.DataFrame(columns=["Date", "Symbol", "Side", "Entry Price", "Exit Price", "P&L", "Notes"])
+
+    # -----------------------------
+    # AI IDEAS CACHE
+    # -----------------------------
+    if "ai_ideas" not in st.session_state:
+        st.session_state.ai_ideas = {}
+
     st.title("🚀 Intraday Trading Dashboard")
     st.markdown("Scans the market for volume anomalies, breakouts, and pullbacks in real-time.")
     
@@ -50,7 +101,7 @@ def main():
     c1, c2, c3, c4 = st.columns(4)
     
     def get_trend(df):
-        if df is None or len(df) == 0:
+        if df is None or len(df) == 0 or 'EMA50' not in df:
             return "Unknown"
         return "Bullish 📈" if df.iloc[-1]['close'] > df.iloc[-1]['EMA50'] else "-Bearish 📉"
         
@@ -60,10 +111,12 @@ def main():
     c2.metric("NASDAQ", f"{tradfi.get('NASDAQ', {}).get('close', 0):.2f}", f"{tradfi.get('NASDAQ', {}).get('change', 0):.2f}%")
     c2.markdown("[📈 Chart](https://www.tradingview.com/chart/?symbol=NASDAQ%3AIXIC)")
     
-    c3.metric("Bitcoin (BTC)", f"${btc_df.iloc[-1]['close']:.2f}", get_trend(btc_df))
+    btc_price = f"${btc_df.iloc[-1]['close']:.2f}" if btc_df is not None and not btc_df.empty else "N/A"
+    c3.metric("Bitcoin (BTC)", btc_price, get_trend(btc_df))
     c3.markdown("[📈 Chart](https://www.tradingview.com/chart/?symbol=BINANCE%3ABTCUSDT)")
     
-    c4.metric("Ethereum (ETH)", f"${eth_df.iloc[-1]['close']:.2f}", get_trend(eth_df))
+    eth_price = f"${eth_df.iloc[-1]['close']:.2f}" if eth_df is not None and not eth_df.empty else "N/A"
+    c4.metric("Ethereum (ETH)", eth_price, get_trend(eth_df))
     c4.markdown("[📈 Chart](https://www.tradingview.com/chart/?symbol=BINANCE%3AETHUSDT)")
 
     st.divider()
@@ -146,7 +199,7 @@ def main():
                         st.plotly_chart(fig, width='stretch')
                         
         with tab4:
-            st.subheader("💡 AI Generated Trade Summaries (Top 5 Setups)")
+            st.subheader("💡 AI Generated Trade Summaries (Top Setups)")
             # Sort by setups
             setup_candidates = details_df[(details_df['Breakout']) | (details_df['Pullback']) | (details_df['Vol Anomaly'])].head(5)
             
@@ -156,16 +209,79 @@ def main():
             cols = st.columns(len(setup_candidates))
             for idx, (_, row) in enumerate(setup_candidates.iterrows()):
                 with cols[idx]:
-                    st.markdown(f"### [{row['Symbol']}]({row['Chart']})")
-                    with st.spinner("Analyzing..."):
-                        idea = generate_ai_trade_idea(row)
-                        st.info(idea)
+                    sym = row['Symbol']
+                    st.markdown(f"### [{sym}]({row['Chart']})")
+                    
+                    if sym in st.session_state.ai_ideas:
+                        st.info(st.session_state.ai_ideas[sym])
+                        if st.button(f"Regenerate Idea", key=f"ai_regen_btn_{sym}_{timeframe}"):
+                            with st.spinner("Analyzing..."):
+                                idea = generate_ai_trade_idea(row)
+                                st.session_state.ai_ideas[sym] = idea
+                                st.rerun()
+                    else:
+                        if st.button(f"Generate AI Idea", key=f"ai_btn_{sym}_{timeframe}"):
+                            with st.spinner("Analyzing..."):
+                                idea = generate_ai_trade_idea(row)
+                                st.session_state.ai_ideas[sym] = idea
+                                st.rerun()
 
     with asset_tabs[0]:
         render_movers_section(fetch_top_binance_movers, fetch_ohlcv_data, '24h Vol (USDT)', is_crypto=True)
         
     with asset_tabs[1]:
         render_movers_section(fetch_top_stock_movers, fetch_stock_ohlcv_data, '24h Vol (USD)', is_crypto=False)
+
+    st.divider()
+
+    # --- 3. Trade Journal ---
+    st.header("📓 Trade Journal & Quick Logs")
+    with st.expander("Log a New Trade", expanded=False):
+        with st.form("trade_form"):
+            col_t1, col_t2, col_t3 = st.columns(3)
+            with col_t1:
+                t_date = st.date_input("Date")
+                t_symbol = st.text_input("Symbol", "AAPL")
+            with col_t2:
+                t_side = st.selectbox("Side", ["LONG", "SHORT"])
+                t_entry = st.number_input("Entry Price", value=0.0, format="%.4f")
+            with col_t3:
+                t_exit = st.number_input("Exit Price", value=0.0, format="%.4f")
+                t_pnl = st.number_input("P&L ($)", value=0.0, format="%.2f")
+            t_notes = st.text_input("Trade Notes (Setup, Emotions, etc.)")
+            
+            submitted = st.form_submit_button("Log Trade")
+            if submitted:
+                new_trade = pd.DataFrame([{
+                    "Date": t_date,
+                    "Symbol": t_symbol,
+                    "Side": t_side,
+                    "Entry Price": t_entry,
+                    "Exit Price": t_exit,
+                    "P&L": t_pnl,
+                    "Notes": t_notes
+                }])
+                st.session_state.trades = pd.concat([st.session_state.trades, new_trade], ignore_index=True)
+                st.success("Trade Logged Successfully!")
+                st.rerun()
+
+    # Editable dataframe to allow users to modify entries or delete them
+    if not st.session_state.trades.empty:
+        st.session_state.trades = st.data_editor(
+            st.session_state.trades, 
+            num_rows="dynamic",
+            use_container_width=True,
+            key="trade_editor"
+        )
+        
+        # Display Quick Stats
+        total_pnl = st.session_state.trades["P&L"].sum()
+        win_rate = len(st.session_state.trades[st.session_state.trades["P&L"] > 0]) / len(st.session_state.trades) * 100 if len(st.session_state.trades) > 0 else 0
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total Trades Logged", len(st.session_state.trades))
+        m2.metric("Total P&L ($)", f"${total_pnl:.2f}")
+        m3.metric("Win Rate", f"{win_rate:.1f}%")
 
 if __name__ == "__main__":
     main()

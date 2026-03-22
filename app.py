@@ -44,6 +44,7 @@ def get_market_status():
 def main():
     st.sidebar.title("⚙️ Settings")
     timeframe = st.sidebar.radio("Select Timeframe:", ["1m", "5m", "15m", "1h", "1d"], index=1)
+    min_score = st.sidebar.slider("Minimum Confidence Score", 0, 100, 30, help="Filter setups by technical strength")
     
     st.sidebar.markdown("---")
     st.sidebar.markdown(f"**Status:** {get_market_status()}")
@@ -142,7 +143,7 @@ def main():
                         
                         if df_ta is not None and not df_ta.empty and 'EMA50' in df_ta.columns and 'RSI' in df_ta.columns:
                             detailed_data[sym] = df_ta
-                            vol_anomaly, breakout, pullback = analyze_strategy(df_ta)
+                            vol_anomaly, breakout, pullback, score, patterns = analyze_strategy(df_ta)
                             last = df_ta.iloc[-1]
                             
                             chart_link = f"https://www.tradingview.com/chart/?symbol={'BINANCE:' + sym.replace('/', '') if is_crypto else sym}"
@@ -151,6 +152,7 @@ def main():
                             scan_results.append({
                                 'Chart': chart_link, 'Symbol': sym, 'Price': row['Price'],
                                 '24h Change (%)': row['24h Change (%)'], 'Volume': vol,
+                                'Score': score, 'Patterns': ", ".join(patterns) if patterns else "-",
                                 'RSI': round(last['RSI'], 1), 'MACD_Hist': round(last['MACD_Hist'], 4) if 'MACD_Hist' in last else 0,
                                 'Vol Anomaly': vol_anomaly, 'Breakout': breakout, 'Pullback': pullback,
                                 'Uptrend': last['close'] > last['EMA50']
@@ -162,6 +164,13 @@ def main():
 
         if details_df.empty:
             st.warning("No data returned or error processing data.")
+            return
+
+        # Apply confidence score filter
+        details_df = details_df[details_df['Score'] >= min_score]
+        
+        if details_df.empty:
+            st.info(f"No assets meet your minimum confidence score of {min_score}.")
             return
 
         tab1, tab2, tab3, tab4 = st.tabs(["List View", "🚨 Alerts & Breakouts", "📈 Interactive Charts", "🧠 AI Ideas"])
@@ -178,7 +187,10 @@ def main():
             
         with tab2:
             action_df = details_df[(details_df['Vol Anomaly']) | (details_df['Breakout']) | (details_df['Pullback'])]
-            st.dataframe(action_df, column_config=link_config, width='stretch', hide_index=True) if not action_df.empty else st.info("No active setups detected.")
+            if not action_df.empty:
+                st.dataframe(action_df, column_config=link_config, width='stretch', hide_index=True)
+            else:
+                st.info("No active setups detected.")
             
         with tab3:
             st.subheader(f"Plotly Charts ({timeframe}) - Top 3 Movers")

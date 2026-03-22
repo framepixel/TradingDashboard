@@ -2,6 +2,7 @@ import streamlit as st
 import ccxt
 import pandas as pd
 import yfinance as yf
+import concurrent.futures
 
 # Initialize Binance exchange
 exchange = ccxt.binance({
@@ -61,12 +62,18 @@ def fetch_ohlcv_data(symbol, timeframe='5m', limit=300):
 
 @st.cache_data(ttl=60)
 def fetch_top_stock_movers():
-    """Fetch 24h change for popular stocks."""
-    tickers = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'INTC', 'NFLX', 
-               'WMT', 'JPM', 'V', 'LLY', 'AVGO', 'COST', 'JNJ', 'ORCL', 'CRM', 'BAC']
+    """Fetch 24h change for a large universe of highly liquid day trading stocks."""
+    # Expanded universe of high volume & high beta stocks for day trading
+    tickers = [
+        'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'INTC', 'NFLX', 
+        'WMT', 'JPM', 'V', 'LLY', 'AVGO', 'COST', 'JNJ', 'ORCL', 'CRM', 'BAC',
+        'SPY', 'QQQ', 'COIN', 'MSTR', 'PLTR', 'SMCI', 'MARA', 'RIOT', 'SQ', 'ROKU',
+        'BA', 'DIS', 'ADBE', 'PYPL', 'UBER', 'SNOW', 'ARM', 'PANW', 'PATH', 'CRWD',
+        'SHOP', 'ZS', 'DDOG', 'MDB', 'NET', 'CVNA', 'DKNG', 'CVX', 'XOM', 'HD'
+    ]
     stock_pairs = []
     
-    for symbol in tickers:
+    def process_ticker(symbol):
         try:
             hist = yf.Ticker(symbol).history(period="5d")
             if not hist.empty and len(hist) >= 2:
@@ -75,18 +82,27 @@ def fetch_top_stock_movers():
                 volume = float(hist['Volume'].iloc[-1])
                 pct_change = ((curr_close - prev_close) / prev_close) * 100
                 
-                stock_pairs.append({
+                return {
                     'Symbol': symbol,
                     'Price': curr_close,
                     '24h Change (%)': pct_change,
                     '24h Volume (USDT)': volume * curr_close # approx dollar volume
-                })
-        except Exception as e:
-            continue
+                }
+        except Exception:
+            return None
+        return None
+
+    # Fetch concurrently to massively speed up UI blocking overhead
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        results = executor.map(process_ticker, tickers)
+        
+    for r in results:
+        if r is not None:
+            stock_pairs.append(r)
             
     df = pd.DataFrame(stock_pairs)
     if not df.empty:
-        df = df.sort_values(by='24h Change (%)', ascending=False).head(20)
+        df = df.sort_values(by='24h Volume (USDT)', ascending=False).head(40) # Show top 40 by liquidity
     return df
 
 @st.cache_data(ttl=60)

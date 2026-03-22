@@ -40,12 +40,31 @@ def calculate_indicators(df):
     # Volume MA (20)
     df['Vol_MA_20'] = df['volume'].rolling(window=20).mean()
     
+    # -----------------------------
+    # CANDLESTICK PATTERNS
+    # -----------------------------
+    # Body and Wicks
+    df['Body'] = abs(df['close'] - df['open'])
+    df['Lower_Wick'] = df[['open', 'close']].min(axis=1) - df['low']
+    df['Upper_Wick'] = df['high'] - df[['open', 'close']].max(axis=1)
+    
+    # Bullish Hammer / Pinbar
+    df['Bullish_Pinbar'] = (df['Lower_Wick'] > (2 * df['Body'])) & (df['Upper_Wick'] < df['Body']) & (df['Body'] > 0)
+    
+    # Bullish Engulfing
+    df['Prev_Open'] = df['open'].shift(1)
+    df['Prev_Close'] = df['close'].shift(1)
+    df['Bullish_Engulfing'] = (df['Prev_Close'] < df['Prev_Open']) & \
+                              (df['close'] > df['open']) & \
+                              (df['open'] <= df['Prev_Close']) & \
+                              (df['close'] >= df['Prev_Open'])
+                              
     return df
 
 def analyze_strategy(df):
-    """Detect Breakouts, Pullbacks, and Volume Anomalies"""
+    """Detect Breakouts, Pullbacks, Volume Anomalies, and calculate Confidence Score"""
     if df is None or len(df) < 25:
-        return False, False, False
+        return False, False, False, 0, []
     
     last = df.iloc[-1]
     
@@ -60,4 +79,44 @@ def analyze_strategy(df):
     uptrend = last['close'] > last['EMA50']
     pullback = uptrend and (last['low'] <= last['EMA20']) and (last['close'] >= last['EMA20'])
     
-    return vol_anomaly, breakout, pullback
+    # Advanced Signal Confidence Score & Tags
+    score = 0
+    patterns = []
+    
+    # Momentum points
+    if last['MACD'] > last['Signal']:
+        score += 15
+        patterns.append("Bullish MACD")
+    
+    if last['RSI'] < 30:
+        score += 20
+        patterns.append("Oversold (RSI)")
+    elif 30 <= last['RSI'] < 50:
+        score += 10
+        patterns.append("Favorable RSI")
+        
+    # Technical Setup Points
+    if breakout:
+        score += 20
+        patterns.append("Breakout")
+    if pullback:
+        score += 15
+        patterns.append("EMA Pullback")
+    if vol_anomaly:
+        score += 15
+        patterns.append("High Vol")
+        
+    # Pattern Points
+    if last['Bullish_Pinbar']:
+        score += 20
+        patterns.append("Hammer/Pinbar")
+    if last['Bullish_Engulfing']:
+        score += 20
+        patterns.append("Bull_Engulfing")
+        
+    # VWAP interaction
+    if ('VWAP' in last) and (last['low'] < last['VWAP']) and (last['close'] > last['VWAP']):
+        score += 15
+        patterns.append("VWAP Bounce")
+    
+    return vol_anomaly, breakout, pullback, score, patterns

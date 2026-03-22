@@ -3,3 +3,5 @@ ccxt
 pandas
 yfinance
 huggingface_hub
+plotly
+streamlit-autorefresh

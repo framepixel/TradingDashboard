@@ -25,7 +25,7 @@ def fetch_tradfi_data():
             data[name] = {"close": 0, "change": 0}
     return data
 
-@st.cache_data(ttl=300) # Cache for 5 minutes
+@st.cache_data(ttl=60) # Cache for 1 minute for active setups
 def fetch_top_binance_movers():
     """Fetch all USDT pairs, rank by 24h volume and % change."""
     try:
@@ -48,8 +48,8 @@ def fetch_top_binance_movers():
         st.error(f"Error fetching tickers: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=300)
-def fetch_ohlcv_data(symbol, timeframe='1h', limit=100):
+@st.cache_data(ttl=60)
+def fetch_ohlcv_data(symbol, timeframe='5m', limit=300):
     """Fetch OHLCV data for a specific crypto symbol"""
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -59,7 +59,7 @@ def fetch_ohlcv_data(symbol, timeframe='1h', limit=100):
     except Exception as e:
         return None
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def fetch_top_stock_movers():
     """Fetch 24h change for popular stocks."""
     tickers = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'INTC', 'NFLX', 
@@ -89,15 +89,15 @@ def fetch_top_stock_movers():
         df = df.sort_values(by='24h Change (%)', ascending=False).head(20)
     return df
 
-@st.cache_data(ttl=300)
-def fetch_stock_ohlcv_data(symbol, timeframe='1h', limit=100):
+@st.cache_data(ttl=60)
+def fetch_stock_ohlcv_data(symbol, timeframe='5m', limit=300):
     """Fetch OHLCV data for a specific stock"""
     try:
-        # Increase period to 3mo to guarantee we get at least 100 1-hour candles even around holidays/weekends
-        interval_map = {'1h': '1h', '1d': '1d'}
-        inv = interval_map.get(timeframe, '1h')
+        # Map Crypto timeframes to YFinance timeframes and appropriate period
+        interval_map = {'1m': ('1m', '5d'), '5m': ('5m', '1mo'), '15m': ('15m', '1mo'), '1h': ('1h', '3mo'), '1d': ('1d', '6mo')}
+        inv, span = interval_map.get(timeframe, ('5m', '1mo'))
         
-        hist = yf.Ticker(symbol).history(period="3mo", interval=inv)
+        hist = yf.Ticker(symbol).history(period=span, interval=inv)
         if hist.empty:
             return None
             

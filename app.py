@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 from data_fetcher import (
     fetch_tradfi_data, 
     fetch_top_binance_movers, 
@@ -15,12 +16,23 @@ from ai_agent import generate_ai_trade_idea
 # ==========================================
 st.set_page_config(page_title="Daily Trading Opportunity Dashboard", layout="wide")
 
+# Try to import autorefresh for active traders
+try:
+    from streamlit_autorefresh import st_autorefresh
+    # Auto-refresh every 60 seconds
+    st_autorefresh(interval=60000, key="datarefresh")
+except ImportError:
+    pass
+
 # ==========================================
 # DASHBOARD UI
 # ==========================================
 def main():
-    st.title("🚀 Daily Trading Opportunity Dashboard")
-    st.markdown("Scans the market for volume anomalies, breakouts, and pullbacks.")
+    st.sidebar.title("⚙️ Settings")
+    timeframe = st.sidebar.radio("Select Timeframe:", ["1m", "5m", "15m", "1h", "1d"], index=1)
+    
+    st.title("🚀 Intraday Trading Dashboard")
+    st.markdown("Scans the market for volume anomalies, breakouts, and pullbacks in real-time.")
     
     # Auto-refresh logic
     col1, col2 = st.columns([8, 1])
@@ -32,8 +44,8 @@ def main():
     # --- 1. Market Overview ---
     st.header("📊 Market Overview")
     tradfi = fetch_tradfi_data()
-    btc_df = calculate_indicators(fetch_ohlcv_data('BTC/USDT', '1d'))
-    eth_df = calculate_indicators(fetch_ohlcv_data('ETH/USDT', '1d'))
+    btc_df = calculate_indicators(fetch_ohlcv_data('BTC/USDT', timeframe))
+    eth_df = calculate_indicators(fetch_ohlcv_data('ETH/USDT', timeframe))
     
     c1, c2, c3, c4 = st.columns(4)
     
@@ -62,44 +74,36 @@ def main():
     asset_tabs = st.tabs(["🪙 Crypto", "📈 Stocks"])
     
     def render_movers_section(fetch_movers_func, fetch_ohlcv_func, volume_label, is_crypto):
-        with st.spinner("Fetching market data and scanning..."):
+        with st.spinner(f"Fetching market data ({timeframe})..."):
             top_pairs = fetch_movers_func()
             
             scan_results = []
+            detailed_data = {}
+
             if not top_pairs.empty:
                 for _, row in top_pairs.iterrows():
                     try:
                         sym = row['Symbol']
-                        df = fetch_ohlcv_func(sym, '1h')
+                        df = fetch_ohlcv_func(sym, timeframe)
                         df_ta = calculate_indicators(df)
                         
-                        # Ensure we have enough data (EMA50 requires min data)
                         if df_ta is not None and not df_ta.empty and 'EMA50' in df_ta.columns and 'RSI' in df_ta.columns:
+                            detailed_data[sym] = df_ta
                             vol_anomaly, breakout, pullback = analyze_strategy(df_ta)
                             last = df_ta.iloc[-1]
                             
-                            # Dynamic tv chart link formulation
-                            if is_crypto:
-                                chart_link = f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym.replace('/', '')}"
-                                vol = f"${row.get('24h Volume (USDT)', 0)/1e6:.1f}M"
-                            else:
-                                chart_link = f"https://www.tradingview.com/chart/?symbol={sym}"
-                                vol = f"${row.get('24h Volume (USDT)', 0)/1e6:.1f}M"  # fallback key used in fetch_top_stock_movers
+                            chart_link = f"https://www.tradingview.com/chart/?symbol={'BINANCE:' + sym.replace('/', '') if is_crypto else sym}"
+                            vol = f"${row.get('24h Volume (USDT)', row.get('24h Volume (USD)', 0))/1e6:.1f}M"
                             
                             scan_results.append({
-                                'Chart': chart_link,
-                                'Symbol': sym,
-                                'Price': row['Price'],
-                                '24h Change (%)': row['24h Change (%)'],
-                                volume_label: vol,
-                                'RSI': last['RSI'],
-                                'Vol Anomaly': vol_anomaly,
-                                'Breakout': breakout,
-                                'Pullback': pullback,
+                                'Chart': chart_link, 'Symbol': sym, 'Price': row['Price'],
+                                '24h Change (%)': row['24h Change (%)'], 'Volume': vol,
+                                'RSI': round(last['RSI'], 1), 'MACD_Hist': round(last['MACD_Hist'], 4) if 'MACD_Hist' in last else 0,
+                                'Vol Anomaly': vol_anomaly, 'Breakout': breakout, 'Pullback': pullback,
                                 'Uptrend': last['close'] > last['EMA50']
                             })
                     except Exception as e:
-                        continue # Skip to next asset if there's any formatting error for this one
+                        continue
 
             details_df = pd.DataFrame(scan_results)
 
@@ -107,22 +111,41 @@ def main():
             st.warning("No data returned or error processing data.")
             return
 
-        # Tabs for different views
-        tab1, tab2, tab3 = st.tabs(["All Top Gainers", "🚨 Anomalies & Breakouts", "🧠 AI Trade Ideas"])
-        
+        tab1, tab2, tab3, tab4 = st.tabs(["List View", "🚨 Alerts & Breakouts", "📈 Interactive Charts", "🧠 AI Ideas"])
         link_config = {"Chart": st.column_config.LinkColumn("Chart", display_text="📈 View")}
         
+        # Throw a toast notification for top alerts
+        if not details_df.empty:
+            alert_count = len(details_df[(details_df['Breakout']) | (details_df['Vol Anomaly'])])
+            if alert_count > 0:
+                st.toast(f"🚨 {alert_count} active setups found in {timeframe} timeframe for {'Crypto' if is_crypto else 'Stocks'}!")
+
         with tab1:
-            st.dataframe(details_df.style.format({'24h Change (%)': '{:.2f}%', 'RSI': '{:.1f}', 'Price': '{:.6f}'}), column_config=link_config, width='stretch')
+            st.dataframe(details_df, column_config=link_config, width='stretch', hide_index=True)
             
         with tab2:
             action_df = details_df[(details_df['Vol Anomaly']) | (details_df['Breakout']) | (details_df['Pullback'])]
-            if not action_df.empty:
-                st.dataframe(action_df, column_config=link_config, width='stretch')
-            else:
-                st.info("No immediate breakouts or anomalies detected in the top gainers right now.")
-                
+            st.dataframe(action_df, column_config=link_config, width='stretch', hide_index=True) if not action_df.empty else st.info("No active setups detected.")
+            
         with tab3:
+            st.subheader(f"Plotly Charts ({timeframe}) - Top 3 Movers")
+            # Show charts for top 3
+            top3 = details_df.head(3)['Symbol'].tolist()
+            cols = st.columns(3)
+            for idx, sym in enumerate(top3):
+                with cols[idx]:
+                    st.markdown(f"**{sym}**")
+                    if sym in detailed_data:
+                        df_plot = detailed_data[sym].tail(60) # Last 60 candles
+                        fig = go.Figure(data=[go.Candlestick(x=df_plot['timestamp'],
+                                        open=df_plot['open'], high=df_plot['high'],
+                                        low=df_plot['low'], close=df_plot['close'])])
+                        if 'VWAP' in df_plot:
+                            fig.add_trace(go.Scatter(x=df_plot['timestamp'], y=df_plot['VWAP'], line=dict(color='orange', width=1), name='VWAP'))
+                        fig.update_layout(height=400, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
+                        st.plotly_chart(fig, width='stretch')
+                        
+        with tab4:
             st.subheader("💡 AI Generated Trade Summaries (Top 5 Setups)")
             # Sort by setups
             setup_candidates = details_df[(details_df['Breakout']) | (details_df['Pullback']) | (details_df['Vol Anomaly'])].head(5)

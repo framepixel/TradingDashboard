@@ -1,6 +1,12 @@
 import streamlit as st
 import pandas as pd
-from data_fetcher import fetch_tradfi_data, fetch_top_binance_movers, fetch_ohlcv_data
+from data_fetcher import (
+    fetch_tradfi_data, 
+    fetch_top_binance_movers, 
+    fetch_ohlcv_data,
+    fetch_top_stock_movers,
+    fetch_stock_ohlcv_data
+)
 from technical_analysis import calculate_indicators, analyze_strategy
 from ai_agent import generate_ai_trade_idea
 
@@ -53,65 +59,90 @@ def main():
     # --- 2. Top Movers & Scans ---
     st.header("🔥 Top Movers & Setups (24h)")
     
-    with st.spinner("Fetching market data and scanning tops pairs..."):
-        top_pairs = fetch_top_binance_movers()
-        
-        # Scan Top 20 for advanced metrics
-        scan_results = []
-        for _, row in top_pairs.iterrows():
-            sym = row['Symbol']
-            df = fetch_ohlcv_data(sym, '1h')
-            df_ta = calculate_indicators(df)
+    asset_tabs = st.tabs(["🪙 Crypto", "📈 Stocks"])
+    
+    def render_movers_section(fetch_movers_func, fetch_ohlcv_func, volume_label, is_crypto):
+        with st.spinner("Fetching market data and scanning..."):
+            top_pairs = fetch_movers_func()
             
-            if df_ta is not None and len(df_ta) > 0:
-                vol_anomaly, breakout, pullback = analyze_strategy(df_ta)
-                last = df_ta.iloc[-1]
+            scan_results = []
+            if not top_pairs.empty:
+                for _, row in top_pairs.iterrows():
+                    try:
+                        sym = row['Symbol']
+                        df = fetch_ohlcv_func(sym, '1h')
+                        df_ta = calculate_indicators(df)
+                        
+                        # Ensure we have enough data (EMA50 requires min data)
+                        if df_ta is not None and not df_ta.empty and 'EMA50' in df_ta.columns and 'RSI' in df_ta.columns:
+                            vol_anomaly, breakout, pullback = analyze_strategy(df_ta)
+                            last = df_ta.iloc[-1]
+                            
+                            # Dynamic tv chart link formulation
+                            if is_crypto:
+                                chart_link = f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym.replace('/', '')}"
+                                vol = f"${row.get('24h Volume (USDT)', 0)/1e6:.1f}M"
+                            else:
+                                chart_link = f"https://www.tradingview.com/chart/?symbol={sym}"
+                                vol = f"${row.get('24h Volume (USDT)', 0)/1e6:.1f}M"  # fallback key used in fetch_top_stock_movers
+                            
+                            scan_results.append({
+                                'Chart': chart_link,
+                                'Symbol': sym,
+                                'Price': row['Price'],
+                                '24h Change (%)': row['24h Change (%)'],
+                                volume_label: vol,
+                                'RSI': last['RSI'],
+                                'Vol Anomaly': vol_anomaly,
+                                'Breakout': breakout,
+                                'Pullback': pullback,
+                                'Uptrend': last['close'] > last['EMA50']
+                            })
+                    except Exception as e:
+                        continue # Skip to next asset if there's any formatting error for this one
+
+            details_df = pd.DataFrame(scan_results)
+
+        if details_df.empty:
+            st.warning("No data returned or error processing data.")
+            return
+
+        # Tabs for different views
+        tab1, tab2, tab3 = st.tabs(["All Top Gainers", "🚨 Anomalies & Breakouts", "🧠 AI Trade Ideas"])
+        
+        link_config = {"Chart": st.column_config.LinkColumn("Chart", display_text="📈 View")}
+        
+        with tab1:
+            st.dataframe(details_df.style.format({'24h Change (%)': '{:.2f}%', 'RSI': '{:.1f}', 'Price': '{:.6f}'}), column_config=link_config, width='stretch')
+            
+        with tab2:
+            action_df = details_df[(details_df['Vol Anomaly']) | (details_df['Breakout']) | (details_df['Pullback'])]
+            if not action_df.empty:
+                st.dataframe(action_df, column_config=link_config, width='stretch')
+            else:
+                st.info("No immediate breakouts or anomalies detected in the top gainers right now.")
                 
-                scan_results.append({
-                    'Chart': f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym.replace('/', '')}",
-                    'Symbol': sym,
-                    'Price': row['Price'],
-                    '24h Change (%)': row['24h Change (%)'],
-                    '24h Vol (USDT)': f"${row['24h Volume (USDT)']/1e6:.1f}M",
-                    'RSI': last['RSI'],
-                    'Vol Anomaly': vol_anomaly,
-                    'Breakout': breakout,
-                    'Pullback': pullback,
-                    'Uptrend': last['close'] > last['EMA50']
-                })
-
-        details_df = pd.DataFrame(scan_results)
-
-    # Tabs for different views
-    tab1, tab2, tab3 = st.tabs(["All Top Gainers", "🚨 Anomalies & Breakouts", "🧠 AI Trade Ideas"])
-    
-    link_config = {"Chart": st.column_config.LinkColumn("Chart", display_text="📈 View")}
-    
-    with tab1:
-        st.dataframe(details_df.style.format({'24h Change (%)': '{:.2f}%', 'RSI': '{:.1f}', 'Price': '{:.6f}'}), column_config=link_config, width='stretch')
-        
-    with tab2:
-        action_df = details_df[(details_df['Vol Anomaly']) | (details_df['Breakout']) | (details_df['Pullback'])]
-        if not action_df.empty:
-            st.dataframe(action_df, column_config=link_config, width='stretch')
-        else:
-            st.info("No immediate breakouts or anomalies detected in the top gainers right now.")
+        with tab3:
+            st.subheader("💡 AI Generated Trade Summaries (Top 5 Setups)")
+            # Sort by setups
+            setup_candidates = details_df[(details_df['Breakout']) | (details_df['Pullback']) | (details_df['Vol Anomaly'])].head(5)
             
-    with tab3:
-        st.subheader("💡 AI Generated Trade Summaries (Top 5 Setups)")
-        # Sort by setups
-        setup_candidates = details_df[(details_df['Breakout']) | (details_df['Pullback']) | (details_df['Vol Anomaly'])].head(5)
+            if setup_candidates.empty:
+                setup_candidates = details_df.head(5) # fallback to top gainers
+                
+            cols = st.columns(len(setup_candidates))
+            for idx, (_, row) in enumerate(setup_candidates.iterrows()):
+                with cols[idx]:
+                    st.markdown(f"### [{row['Symbol']}]({row['Chart']})")
+                    with st.spinner("Analyzing..."):
+                        idea = generate_ai_trade_idea(row)
+                        st.info(idea)
+
+    with asset_tabs[0]:
+        render_movers_section(fetch_top_binance_movers, fetch_ohlcv_data, '24h Vol (USDT)', is_crypto=True)
         
-        if setup_candidates.empty:
-            setup_candidates = details_df.head(5) # fallback to top gainers
-            
-        cols = st.columns(len(setup_candidates))
-        for idx, (_, row) in enumerate(setup_candidates.iterrows()):
-            with cols[idx]:
-                st.markdown(f"### [{row['Symbol']}]({row['Chart']})")
-                with st.spinner("Analyzing..."):
-                    idea = generate_ai_trade_idea(row)
-                    st.info(idea)
+    with asset_tabs[1]:
+        render_movers_section(fetch_top_stock_movers, fetch_stock_ohlcv_data, '24h Vol (USD)', is_crypto=False)
 
 if __name__ == "__main__":
     main()

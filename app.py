@@ -146,12 +146,36 @@ def main():
             st.rerun()
 
     # --- 1. Market Overview ---
-    st.header("📊 Market Overview")
+    st.header("📊 Market Overview & Breadth")
     tradfi = fetch_tradfi_data()
     btc_df = calculate_indicators(fetch_ohlcv_data('BTC/USDT', timeframe))
     eth_df = calculate_indicators(fetch_ohlcv_data('ETH/USDT', timeframe))
     
-    c1, c2, c3, c4 = st.columns(4)
+    top_stocks = fetch_top_stock_movers()
+    market_breadth = "N/A"
+    breadth_delta = None
+    delta_color = "off"
+    
+    if not top_stocks.empty:
+        advancing = len(top_stocks[top_stocks['24h Change (%)'] > 0])
+        declining = len(top_stocks[top_stocks['24h Change (%)'] < 0])
+        total = advancing + declining
+        if total > 0:
+            breadth_pct = (advancing / total) * 100
+            
+            if breadth_pct >= 60:
+                breadth_delta = "Bullish Tracker"
+                delta_color = "normal"
+            elif breadth_pct <= 40:
+                breadth_delta = "-Bearish Tracker"
+                delta_color = "normal"
+            else:
+                breadth_delta = "Neutral"
+                delta_color = "off"
+                
+            market_breadth = f"{advancing} Adv / {declining} Dec"
+
+    c1, c2, c3, c4, c5 = st.columns(5)
     
     def get_trend(df):
         if df is None or len(df) == 0 or 'EMA50' not in df:
@@ -159,18 +183,16 @@ def main():
         return "Bullish 📈" if df.iloc[-1]['close'] > df.iloc[-1]['EMA50'] else "-Bearish 📉"
         
     c1.metric("S&P 500", f"{tradfi.get('S&P 500', {}).get('close', 0):.2f}", f"{tradfi.get('S&P 500', {}).get('change', 0):.2f}%")
-    c1.markdown("[📈 Chart](https://www.tradingview.com/chart/?symbol=SP%3ASPX)")
     
     c2.metric("NASDAQ", f"{tradfi.get('NASDAQ', {}).get('close', 0):.2f}", f"{tradfi.get('NASDAQ', {}).get('change', 0):.2f}%")
-    c2.markdown("[📈 Chart](https://www.tradingview.com/chart/?symbol=NASDAQ%3AIXIC)")
     
     btc_price = f"${btc_df.iloc[-1]['close']:.2f}" if btc_df is not None and not btc_df.empty else "N/A"
     c3.metric("Bitcoin (BTC)", btc_price, get_trend(btc_df))
-    c3.markdown("[📈 Chart](https://www.tradingview.com/chart/?symbol=BINANCE%3ABTCUSDT)")
     
     eth_price = f"${eth_df.iloc[-1]['close']:.2f}" if eth_df is not None and not eth_df.empty else "N/A"
     c4.metric("Ethereum (ETH)", eth_price, get_trend(eth_df))
-    c4.markdown("[📈 Chart](https://www.tradingview.com/chart/?symbol=BINANCE%3AETHUSDT)")
+
+    c5.metric("Top Equity Breadth", market_breadth, breadth_delta, delta_color=delta_color)
 
     st.divider()
 
@@ -399,13 +421,6 @@ def main():
 
     # Editable dataframe to allow users to modify entries or delete them
     if not st.session_state.trades.empty:
-        st.session_state.trades = st.data_editor(
-            st.session_state.trades, 
-            num_rows="dynamic",
-            use_container_width=True,
-            key="trade_editor"
-        )
-        
         # Display Quick Stats
         total_pnl = st.session_state.trades["P&L"].sum()
         win_rate = len(st.session_state.trades[st.session_state.trades["P&L"] > 0]) / len(st.session_state.trades) * 100 if len(st.session_state.trades) > 0 else 0
@@ -414,15 +429,48 @@ def main():
         m1.metric("Total Trades Logged", len(st.session_state.trades))
         m2.metric("Total P&L ($)", f"${total_pnl:.2f}")
         m3.metric("Win Rate", f"{win_rate:.1f}%")
+
+        # Layout: Journal Table on Left, Equity Curve on Right
+        col_table, col_chart = st.columns([1.5, 1])
         
-        # Export to CSV
-        csv = st.session_state.trades.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Download Trade Journal as CSV",
-            data=csv,
-            file_name='trade_journal.csv',
-            mime='text/csv',
-        )
+        with col_table:
+            st.session_state.trades = st.data_editor(
+                st.session_state.trades, 
+                num_rows="dynamic",
+                use_container_width=True,
+                key="trade_editor"
+            )
+            # Export to CSV
+            csv = st.session_state.trades.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Download Trade Journal as CSV",
+                data=csv,
+                file_name='trade_journal.csv',
+                mime='text/csv',
+            )
+            
+        with col_chart:
+            if len(st.session_state.trades) > 0:
+                # Assuming index is chronological, calculate cumulative PnL
+                chart_df = st.session_state.trades.copy()
+                chart_df['Cumulative P&L'] = chart_df['P&L'].cumsum()
+                
+                fig_eq = go.Figure()
+                fig_eq.add_trace(go.Scatter(
+                    y=chart_df['Cumulative P&L'],
+                    mode='lines+markers',
+                    name='Equity Curve',
+                    line=dict(color='royalblue', width=3),
+                    marker=dict(size=6)
+                ))
+                fig_eq.update_layout(
+                    title="Cumulative P&L (Equity Curve)",
+                    xaxis_title="Trade #",
+                    yaxis_title="Profit & Loss ($)",
+                    margin=dict(l=0, r=0, t=40, b=0),
+                    height=350
+                )
+                st.plotly_chart(fig_eq, use_container_width=True)
 
 if __name__ == "__main__":
     main()

@@ -58,8 +58,54 @@ def calculate_indicators(df):
                               (df['close'] > df['open']) & \
                               (df['open'] <= df['Prev_Close']) & \
                               (df['close'] >= df['Prev_Open'])
+    
+    # -----------------------------
+    # VECTORIZED STRATEGY SIGNALS (For Backtesting)
+    # -----------------------------
+    # Past 20-candle high (excluding current candle)
+    df['Past_20_High'] = df['high'].shift(1).rolling(window=20).max()
+    df['Signal_Breakout'] = df['close'] > df['Past_20_High']
+    
+    # Volume Anomaly
+    df['Signal_Vol_Anomaly'] = df['volume'] > (1.5 * df['Vol_MA_20'])
+    
+    # Pullback
+    df['Uptrend'] = df['close'] > df['EMA50']
+    df['Signal_Pullback'] = df['Uptrend'] & (df['low'] <= df['EMA20']) & (df['close'] >= df['EMA20'])
                               
     return df
+
+def run_backtest(df, signal_col, hold_period=5):
+    """
+    Simple Historical Backtesting Engine
+    Buys when the signal occurs, holds for `hold_period` candles, and computes the outcome.
+    Returns: trades_count, win_rate_percentage, total_pnl_percentage
+    """
+    if df is None or len(df) < (hold_period + 1) or signal_col not in df.columns:
+        return 0, 0.0, 0.0
+    
+    trades = 0
+    wins = 0
+    total_pnl = 0.0
+    
+    # Loop over history minus the hold period to avoid out-of-bounds
+    # Exclude the very last few candles where we can't complete the hold period
+    for i in range(len(df) - hold_period - 1):
+        if df.iloc[i][signal_col]:
+            # Enter at the open of the next candle after the signal
+            entry_price = df.iloc[i + 1]['open']
+            # Exit at the close of the holding period
+            exit_price = df.iloc[i + 1 + hold_period]['close']
+            
+            if entry_price > 0:
+                pnl = (exit_price - entry_price) / entry_price
+                trades += 1
+                total_pnl += pnl
+                if pnl > 0:
+                    wins += 1
+                    
+    win_rate = (wins / trades * 100) if trades > 0 else 0.0
+    return trades, win_rate, total_pnl * 100
 
 def analyze_strategy(df):
     """Detect Breakouts, Pullbacks, Volume Anomalies, and calculate Confidence Score"""

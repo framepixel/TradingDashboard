@@ -12,7 +12,7 @@ from data_fetcher import (
     fetch_stock_ohlcv_data,
     fetch_market_news
 )
-from technical_analysis import calculate_indicators, analyze_strategy
+from technical_analysis import calculate_indicators, analyze_strategy, run_backtest
 from ai_agent import generate_ai_trade_idea
 
 # ==========================================
@@ -61,6 +61,44 @@ def main():
         if webhook_url != st.session_state.get("discord_webhook", ""):
             st.session_state.discord_webhook = webhook_url
         st.session_state.webhook_active = st.checkbox("Enable Discord Alerts", value=st.session_state.get("webhook_active", False))
+
+    st.sidebar.markdown("---")
+    
+    # -----------------------------
+    # RISK & POSITION SIZING CALCULATOR
+    # -----------------------------
+    st.sidebar.title("⚖️ Risk Calculator")
+    account_size = st.sidebar.number_input("Account Size ($)", min_value=100.0, value=10000.0, step=100.0)
+    risk_pct = st.sidebar.slider("Risk per Trade (%)", 0.1, 5.0, 1.0, 0.1)
+    
+    calc_symbol = st.sidebar.text_input("Ticker to Calculate", "SPY").upper()
+    if st.sidebar.button("Calculate Position Size"):
+        try:
+            # We assume the user wants the calculation on their current chosen timeframe
+            df_risk = fetch_stock_ohlcv_data(calc_symbol, timeframe)
+            if df_risk is not None and not df_risk.empty:
+                df_risk = calculate_indicators(df_risk)
+                current_price = df_risk.iloc[-1]['close']
+                atr = df_risk.iloc[-1]['ATR']
+                
+                if pd.notna(atr) and atr > 0:
+                    risk_amount = account_size * (risk_pct / 100)
+                    # Stop loss placed at 1.5x ATR below entry
+                    stop_loss_dist = atr * 1.5
+                    position_size = risk_amount / stop_loss_dist
+                    total_capital_needed = position_size * current_price
+                    
+                    st.sidebar.info(f"**Price:** ${current_price:.2f}\n"
+                                    f"**Risk Amount:** ${risk_amount:.2f}\n"
+                                    f"**Suggested SL:** ${current_price - stop_loss_dist:.2f} ({stop_loss_dist:.2f} pt)\n"
+                                    f"**Shares to Buy:** {position_size:.2f}\n"
+                                    f"**Capital Rec:** ${total_capital_needed:.2f}")
+                else:
+                    st.sidebar.warning("Not enough data to calculate ATR.")
+            else:
+                st.sidebar.error("Could not fetch data for ticker.")
+        except Exception as e:
+            st.sidebar.error("Error calculating risk.")
 
     st.sidebar.markdown("---")
     
@@ -198,7 +236,7 @@ def main():
 
         styled_df = details_df.style.map(color_score, subset=['Score']).map(color_rsi, subset=['RSI'])
 
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["List View", "🚨 Alerts & Breakouts", "📈 Interactive Charts", "🧠 AI Ideas", "📰 Latest News"])
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["List View", "🚨 Alerts & Breakouts", "📈 Interactive Charts", "🧠 AI Ideas", "📰 Latest News", "🧪 Backtest Engine"])
         link_config = {"Chart": st.column_config.LinkColumn("Chart", display_text="📈 View")}
         
         # Throw a toast notification for top alerts
@@ -288,6 +326,37 @@ def main():
                             st.markdown(f"[Read Full Article]({item['Link']})")
                 else:
                     st.info(f"No recent news found for {top_sym}.")
+
+        with tab6:
+            st.subheader(f"🧪 Quick Backtester (Current Timeframe: {timeframe})")
+            st.markdown("Tests how successful the **Breakout Setup** has been on this ticker historically when holding for 5 candles.")
+            
+            backtest_results = []
+            
+            for sym, df in detailed_data.items():
+                if sym in details_df['Symbol'].values:
+                    trades, wr, pnl = run_backtest(df, 'Signal_Breakout', hold_period=5)
+                    backtest_results.append({
+                        "Symbol": sym,
+                        "Historical Trades": trades,
+                        "Win Rate (%)": wr,
+                        "Total Return (%)": pnl
+                    })
+                    
+            bt_df = pd.DataFrame(backtest_results)
+            if not bt_df.empty:
+                # Sort by win rate and highlight
+                bt_df = bt_df.sort_values(by="Win Rate (%)", ascending=False)
+                
+                def color_wr(val):
+                    color = 'rgba(144, 238, 144, 0.2)' if val >= 55 else 'rgba(240, 128, 128, 0.2)' if val < 40 else ''
+                    return f'background-color: {color}'
+                    
+                st.dataframe(bt_df.style.map(color_wr, subset=['Win Rate (%)'])
+                                     .format({'Win Rate (%)': '{:.1f}%', 'Total Return (%)': '{:.2f}%'}),
+                             use_container_width=True, hide_index=True)
+            else:
+                st.info("Not enough data to run backtests.")
 
     with asset_tabs[0]:
         render_movers_section(fetch_top_binance_movers, fetch_ohlcv_data, '24h Vol (USDT)', is_crypto=True)

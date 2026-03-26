@@ -278,13 +278,13 @@ def main():
                         pass
 
         with tab1:
-            st.dataframe(styled_df, column_config=link_config, use_container_width=True, hide_index=True)
+            st.dataframe(styled_df, column_config=link_config, width='content', hide_index=True)
             
         with tab2:
             action_df = details_df[(details_df['Vol Anomaly']) | (details_df['Breakout']) | (details_df['Pullback'])]
             if not action_df.empty:
                 styled_action_df = action_df.style.map(color_score, subset=['Score']).map(color_rsi, subset=['RSI'])
-                st.dataframe(styled_action_df, column_config=link_config, use_container_width=True, hide_index=True)
+                st.dataframe(styled_action_df, column_config=link_config, width='content', hide_index=True)
             else:
                 st.info("No active setups detected.")
             
@@ -304,7 +304,7 @@ def main():
                         if 'VWAP' in df_plot:
                             fig.add_trace(go.Scatter(x=df_plot['timestamp'], y=df_plot['VWAP'], line=dict(color='orange', width=1), name='VWAP'))
                         fig.update_layout(height=400, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='content')
                         
         with tab4:
             st.subheader("💡 AI Generated Trade Summaries (Top Setups)")
@@ -376,7 +376,7 @@ def main():
                     
                 st.dataframe(bt_df.style.map(color_wr, subset=['Win Rate (%)'])
                                      .format({'Win Rate (%)': '{:.1f}%', 'Total Return (%)': '{:.2f}%'}),
-                             use_container_width=True, hide_index=True)
+                             width='content', hide_index=True)
             else:
                 st.info("Not enough data to run backtests.")
 
@@ -437,7 +437,7 @@ def main():
             st.session_state.trades = st.data_editor(
                 st.session_state.trades, 
                 num_rows="dynamic",
-                use_container_width=True,
+                width='content',
                 key="trade_editor"
             )
             # Export to CSV
@@ -470,7 +470,7 @@ def main():
                     margin=dict(l=0, r=0, t=40, b=0),
                     height=350
                 )
-                st.plotly_chart(fig_eq, use_container_width=True)
+                st.plotly_chart(fig_eq, width='content')
 
 if __name__ == "__main__":
     main()

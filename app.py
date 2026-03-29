@@ -46,7 +46,7 @@ def get_market_status():
 # ==========================================
 def main():
     st.sidebar.title("⚙️ Settings")
-    timeframe = st.sidebar.radio("Select Timeframe:", ["1m", "5m", "15m", "1h", "1d"], index=1)
+    timeframe = st.sidebar.radio("Select Timeframe:", ["1m", "5m", "15m", "1h", "4h", "1d", "1w"], index=4)
     min_score = st.sidebar.slider("Minimum Confidence Score", 0, 100, 30, help="Filter setups by technical strength")
     
     st.sidebar.markdown("---")

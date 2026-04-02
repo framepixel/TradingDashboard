@@ -1,0 +1,7 @@
+- Make it so that we get Cryptocurrencies/stocks before being too late to the party.
+- Add news to crypto.
+- Keep the refreshing from occuring too often.
+- Fix the issue where most cryptocurrencies that appear are in the "pump-and-dump" territory.
+- Split the stocks in the list view in categories: Stocks, ETFs, Comodities, etc.
+- Change Streamlit browser icon with an upward trend chart logo.
+- Fix `$SQ: possibly delisted; no price data found  (period=5d) (Yahoo error = "No data found, symbol may be delisted")`

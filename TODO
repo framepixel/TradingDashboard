@@ -5,3 +5,5 @@
 - Split the stocks in the list view in categories: Stocks, ETFs, Comodities, etc.
 - Change Streamlit browser icon with an upward trend chart logo.
 - Fix `$SQ: possibly delisted; no price data found  (period=5d) (Yahoo error = "No data found, symbol may be delisted")`
+
+- Implement the custom trading strategy from @fxalexg

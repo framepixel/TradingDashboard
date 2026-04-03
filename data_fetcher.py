@@ -3,6 +3,8 @@ import ccxt
 import pandas as pd
 import yfinance as yf
 import concurrent.futures
+import contextlib
+import io
 
 # Initialize Binance exchange
 exchange = ccxt.binance({
@@ -16,7 +18,8 @@ def fetch_tradfi_data():
     data = {}
     for name, ticker in indices.items():
         try:
-            hist = yf.Ticker(ticker).history(period="5d")
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                hist = yf.Ticker(ticker).history(period="5d")
             if len(hist) >= 2:
                 prev_close = hist['Close'].iloc[-2]
                 curr_close = hist['Close'].iloc[-1]
@@ -75,7 +78,8 @@ def fetch_top_stock_movers():
     
     def process_ticker(symbol):
         try:
-            hist = yf.Ticker(symbol).history(period="5d")
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                hist = yf.Ticker(symbol).history(period="5d")
             if not hist.empty and len(hist) >= 2:
                 prev_close = float(hist['Close'].iloc[-2])
                 curr_close = float(hist['Close'].iloc[-1])
@@ -113,7 +117,8 @@ def fetch_stock_ohlcv_data(symbol, timeframe='5m', limit=300):
         interval_map = {'1m': ('1m', '5d'), '5m': ('5m', '1mo'), '15m': ('15m', '1mo'), '1h': ('1h', '3mo'), '1d': ('1d', '6mo')}
         inv, span = interval_map.get(timeframe, ('5m', '1mo'))
         
-        hist = yf.Ticker(symbol).history(period=span, interval=inv)
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            hist = yf.Ticker(symbol).history(period=span, interval=inv)
         if hist.empty:
             return None
             

@@ -11,7 +11,7 @@ exchange = ccxt.binance({
     'enableRateLimit': True,
 })
 
-@st.cache_data(ttl=900) # Cache for 15 minutes
+@st.cache_data(ttl=600) # Cache for 10 minutes
 def fetch_tradfi_data():
     """Fetch S&P500 and NASDAQ daily change using yfinance"""
     indices = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC"}
@@ -29,7 +29,7 @@ def fetch_tradfi_data():
             data[name] = {"close": 0, "change": 0}
     return data
 
-@st.cache_data(ttl=60) # Cache for 1 minute for active setups
+@st.cache_data(ttl=600) # Cache for 10 minutes for active setups
 def fetch_top_binance_movers():
     """Fetch all USDT pairs, rank by 24h volume and % change."""
     try:
@@ -52,7 +52,7 @@ def fetch_top_binance_movers():
         st.error(f"Error fetching tickers: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=600)
 def fetch_ohlcv_data(symbol, timeframe='5m', limit=300):
     """Fetch OHLCV data for a specific crypto symbol"""
     try:
@@ -63,7 +63,7 @@ def fetch_ohlcv_data(symbol, timeframe='5m', limit=300):
     except Exception as e:
         return None
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=600)
 def fetch_top_stock_movers():
     """Fetch 24h change for a large universe of highly liquid day trading stocks."""
     # Expanded universe of high volume & high beta stocks for day trading
@@ -109,7 +109,7 @@ def fetch_top_stock_movers():
         df = df.sort_values(by='24h Volume (USDT)', ascending=False).head(40) # Show top 40 by liquidity
     return df
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=600)
 def fetch_stock_ohlcv_data(symbol, timeframe='5m', limit=300):
     """Fetch OHLCV data for a specific stock"""
     try:
@@ -141,7 +141,7 @@ def fetch_stock_ohlcv_data(symbol, timeframe='5m', limit=300):
     except Exception as e:
         return None
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600)
 def fetch_market_news(symbol="SPY"):
     """Fetch the latest market news from Yahoo Finance for a specific ticker to gauge sentiment"""
     try:

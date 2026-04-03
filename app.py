@@ -23,8 +23,8 @@ st.set_page_config(page_title="Daily Trading Opportunity Dashboard", layout="wid
 # Try to import autorefresh for active traders
 try:
     from streamlit_autorefresh import st_autorefresh
-    # Auto-refresh every 60 seconds
-    st_autorefresh(interval=60000, key="datarefresh")
+    # Auto-refresh every 10 minutes
+    st_autorefresh(interval=600000, key="datarefresh")
 except ImportError:
     pass
 

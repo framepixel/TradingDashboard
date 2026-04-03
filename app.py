@@ -335,8 +335,20 @@ def main():
                                 st.rerun()
                                 
         with tab5:
-            st.subheader(f"📰 Live News Feed ({'Crypto is not supported yet' if is_crypto else 'Stocks'})")
-            if not is_crypto:
+            st.subheader(f"📰 Live News Feed ({'Crypto' if is_crypto else 'Stocks'})")
+            if is_crypto:
+                st.markdown("**Search for any cryptocurrency news:**")
+                # Give user the option to check any crypto news, not strictly dependent on top movers
+                news_sym = st.text_input("Crypto Symbol (e.g. BTC-USD, ETH-USD):", value="BTC-USD", key=f"crypto_news_{timeframe}")
+                news_items = fetch_market_news(news_sym)
+                if news_items:
+                    for item in news_items:
+                        with st.expander(f"{item['Time']} | {item['Title']}"):
+                            st.write(f"Source: {item['Publisher']}")
+                            st.markdown(f"[Read Full Article]({item['Link']})")
+                else:
+                    st.info(f"No recent news found for {news_sym}.")
+            else:
                 top_sym = details_df.iloc[0]['Symbol'] if not details_df.empty else "SPY"
                 st.markdown(f"**Latest news for {top_sym} (Top Mover):**")
                 

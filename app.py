@@ -3,7 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import json
-from datetime import datetime, timezone, time as dt_time
+from datetime import datetime, timezone, timedelta, time as dt_time
+import pandas_market_calendars as mcal
 from data_fetcher import (
     fetch_tradfi_data, 
     fetch_top_binance_movers, 
@@ -28,18 +29,58 @@ try:
 except ImportError:
     pass
 
-def get_market_status():
-    """Check if US Markets are open"""
+def get_market_info(calendar_name, market_name):
     now = datetime.now(timezone.utc)
-    # US Market Hours (9:30 AM - 4:00 PM ET) roughly 13:30 to 20:00 UTC during daylight saving (or 14:30 to 21:00 std)
-    # Simplified approximation for general awareness
-    us_market_open = dt_time(13, 30)
-    us_market_close = dt_time(20, 0)
-    
-    if us_market_open <= now.time() <= us_market_close and now.weekday() < 5:
-        return "🟢 US Markets: OPEN"
-    else:
-        return "🔴 US Markets: CLOSED"
+    try:
+        cal = mcal.get_calendar(calendar_name)
+        today_date = now.strftime('%Y-%m-%d')
+        # Get schedule for today and tomorrow to check next open
+        schedule = cal.schedule(start_date=today_date, end_date=(now + timedelta(days=5)).strftime('%Y-%m-%d'))
+        
+        if schedule.empty:
+            return f"🔴 {market_name}: CLOSED (Holiday/Weekend)"
+            
+        # Current day schedule
+        today_schedule = schedule[schedule.index.date == now.date()]
+        if today_schedule.empty:
+            # It's weekend/holiday today, find next open
+            next_open = schedule.iloc[0]['market_open']
+            time_left = next_open - pd.Timestamp(now)
+            hours, remainder = divmod(time_left.total_seconds(), 3600)
+            minutes, _ = divmod(remainder, 60)
+            return f"🔴 {market_name}: CLOSED (Opens in {int(hours)}h {int(minutes)}m)"
+            
+        market_open = today_schedule.iloc[0]['market_open']
+        market_close = today_schedule.iloc[0]['market_close']
+        
+        if pd.Timestamp(now) < market_open:
+            time_left = market_open - pd.Timestamp(now)
+            hours, remainder = divmod(time_left.total_seconds(), 3600)
+            minutes, _ = divmod(remainder, 60)
+            return f"🔴 {market_name}: CLOSED (Opens in {int(hours)}h {int(minutes)}m)"
+        elif market_open <= pd.Timestamp(now) <= market_close:
+            time_left = market_close - pd.Timestamp(now)
+            hours, remainder = divmod(time_left.total_seconds(), 3600)
+            minutes, _ = divmod(remainder, 60)
+            return f"🟢 {market_name}: OPEN (Closes in {int(hours)}h {int(minutes)}m)"
+        else:
+            # Market closed for today, get tomorrow's open
+            if len(schedule) > 1:
+                next_open = schedule.iloc[1]['market_open']
+                time_left = next_open - pd.Timestamp(now)
+                hours, remainder = divmod(time_left.total_seconds(), 3600)
+                minutes, _ = divmod(remainder, 60)
+                return f"🔴 {market_name}: CLOSED (Opens in {int(hours)}h {int(minutes)}m)"
+            else:
+                return f"🔴 {market_name}: CLOSED"
+    except Exception:
+        return f"⚪ {market_name}: STATUS UNKNOWN"
+
+def get_market_status():
+    """Check if US and UK Markets are open"""
+    us_status = get_market_info('NYSE', 'US Markets')
+    uk_status = get_market_info('LSE', 'UK Markets')
+    return f"{us_status}\n\n{uk_status}"
 
 # ==========================================
 # DASHBOARD UI
@@ -50,7 +91,7 @@ def main():
     min_score = st.sidebar.slider("Minimum Confidence Score", 0, 100, 30, help="Filter setups by technical strength")
     
     st.sidebar.markdown("---")
-    st.sidebar.markdown(f"**Status:** {get_market_status()}")
+    st.sidebar.markdown(f"**Status:**\n\n{get_market_status()}")
     st.sidebar.markdown("---")
     
     # -----------------------------
@@ -88,10 +129,10 @@ def main():
                     position_size = risk_amount / stop_loss_dist
                     total_capital_needed = position_size * current_price
                     
-                    st.sidebar.info(f"**Price:** ${current_price:.2f}\n"
-                                    f"**Risk Amount:** ${risk_amount:.2f}\n"
-                                    f"**Suggested SL:** ${current_price - stop_loss_dist:.2f} ({stop_loss_dist:.2f} pt)\n"
-                                    f"**Shares to Buy:** {position_size:.2f}\n"
+                    st.sidebar.info(f"**Price:** ${current_price:.2f}\n\n"
+                                    f"**Risk Amount:** ${risk_amount:.2f}\n\n"
+                                    f"**Suggested SL:** ${current_price - stop_loss_dist:.2f} ({stop_loss_dist:.2f} pt)\n\n"
+                                    f"**Shares to Buy:** {position_size:.2f}\n\n"
                                     f"**Capital Rec:** ${total_capital_needed:.2f}")
                 else:
                     st.sidebar.warning("Not enough data to calculate ATR.")

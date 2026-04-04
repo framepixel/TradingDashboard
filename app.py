@@ -19,7 +19,7 @@ from ai_agent import generate_ai_trade_idea
 # ==========================================
 # PAGE CONFIGURATION & INITIALIZATION
 # ==========================================
-st.set_page_config(page_title="Daily Trading Opportunity Dashboard", layout="wide")
+st.set_page_config(page_title="Daily Trading Opportunity Dashboard", page_icon="📈", layout="wide")
 
 # Try to import autorefresh for active traders
 try:

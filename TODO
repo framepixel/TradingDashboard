@@ -1,10 +1,8 @@
 - Make it so that we get Cryptocurrencies/stocks before being too late to the party.
 - Fix the issue where most cryptocurrencies that appear are in the "pump-and-dump" territory.
 - Split the stocks in the list view in categories: Stocks, ETFs, Comodities, etc.
-- Change Streamlit browser icon with an upward trend chart logo.
 - Make it so that the logs are not dependent on whether I am in the cryptocurrency or stock section.
 - Make it so that the logs are saved to a file locally to avoid erasure after switch off the streamlit server.
 - Have the dropdown in the logs section automatically detect the ticker and suggest the ticker.
-- Fix the US Markets symbol showing "OPEN" on holidays.
 
 - Implement the custom trading strategy from @fxalexg

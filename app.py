@@ -41,7 +41,8 @@ def get_market_info(calendar_name, market_name):
             return f"🔴 {market_name}: CLOSED (Holiday/Weekend)"
             
         # Current day schedule
-        today_schedule = schedule[schedule.index.date == now.date()]
+        schedule_index = pd.DatetimeIndex(schedule.index)
+        today_schedule = schedule[schedule_index.date == now.date()]
         if today_schedule.empty:
             # It's weekend/holiday today, find next open
             next_open = schedule.iloc[0]['market_open']
@@ -89,9 +90,15 @@ def main():
     st.sidebar.title("⚙️ Settings")
     timeframe = st.sidebar.radio("Select Timeframe:", ["1m", "5m", "15m", "1h", "4h", "1d", "1w"], index=4)
     min_score = st.sidebar.slider("Minimum Confidence Score", 0, 100, 30, help="Filter setups by technical strength")
+    selected_risk_tiers = st.sidebar.multiselect(
+        "Risk tiers to include",
+        options=["FRESH", "ESTABLISHED", "EXTENDED", "EXHAUSTED"],
+        default=["FRESH", "ESTABLISHED", "EXTENDED"],
+        help="Exhausted setups are excluded by default to avoid late entries."
+    )
     
     st.sidebar.markdown("---")
-    st.sidebar.markdown(f"**Status:**\n\n{get_market_status()}")
+    st.sidebar.markdown(f"**Market Status:**\n\n{get_market_status()}")
     st.sidebar.markdown("---")
     
     # -----------------------------
@@ -258,19 +265,29 @@ def main():
                         
                         if df_ta is not None and not df_ta.empty and 'EMA50' in df_ta.columns and 'RSI' in df_ta.columns:
                             detailed_data[sym] = df_ta
-                            vol_anomaly, breakout, pullback, score, patterns = analyze_strategy(df_ta)
+                            df_4h_bias = None
+                            if is_crypto:
+                                raw_4h = fetch_ohlcv_data(sym, timeframe='4h', limit=300)
+                                df_4h_bias = calculate_indicators(raw_4h)
+
+                            vol_anomaly, breakout, pullback, score, patterns, risk_tier, risk_flags, bias_label = analyze_strategy(df_ta, df_4h_bias)
                             last = df_ta.iloc[-1]
                             
                             chart_link = f"https://www.tradingview.com/chart/?symbol={'BINANCE:' + sym.replace('/', '') if is_crypto else sym}"
-                            vol = f"${row.get('24h Volume (USDT)', row.get('24h Volume (USD)', 0))/1e6:.1f}M"
+                            raw_volume = row.get('24h Volume (USDT)', row.get('24h Volume (USD)', 0))
+                            vol = f"${raw_volume/1e6:.1f}M"
                             
                             scan_results.append({
                                 'Chart': chart_link, 'Symbol': sym, 'Price': row['Price'],
                                 '24h Change (%)': row['24h Change (%)'], 'Volume': vol,
-                                'Score': score, 'Patterns': ", ".join(patterns) if patterns else "-",
+                                'Score': score, 'Quality Score': score, 'Patterns': ", ".join(patterns) if patterns else "-",
                                 'RSI': round(last['RSI'], 1), 'MACD_Hist': round(last['MACD_Hist'], 4) if 'MACD_Hist' in last else 0,
                                 'Vol Anomaly': vol_anomaly, 'Breakout': breakout, 'Pullback': pullback,
-                                'Uptrend': last['close'] > last['EMA50']
+                                'Uptrend': last['close'] > last['EMA50'],
+                                'Risk Tier': risk_tier,
+                                'Risk Flags': ", ".join(risk_flags) if risk_flags else "-",
+                                '4h Bias': bias_label,
+                                'Raw Volume': raw_volume
                             })
                     except Exception as e:
                         continue
@@ -281,8 +298,13 @@ def main():
             st.warning("No data returned or error processing data.")
             return
 
-        # Apply confidence score filter
-        details_df = details_df[details_df['Score'] >= min_score]
+        # Apply risk-tier and confidence filters.
+        if selected_risk_tiers:
+            details_df = details_df[details_df['Risk Tier'].isin(selected_risk_tiers)]
+        details_df = details_df[details_df['Quality Score'] >= min_score]
+
+        # Prioritize quality first, then liquidity.
+        details_df = details_df.sort_values(by=['Quality Score', 'Raw Volume'], ascending=[False, False])
         
         if details_df.empty:
             st.info(f"No assets meet your minimum confidence score of {min_score}.")
@@ -297,14 +319,19 @@ def main():
             color = 'rgba(240, 128, 128, 0.2)' if val >= 70 else 'rgba(144, 238, 144, 0.2)' if val <= 30 else ''
             return f'background-color: {color}'
 
-        styled_df = details_df.style.map(color_score, subset=['Score']).map(color_rsi, subset=['RSI'])
+        styled_df = details_df.style.map(color_score, subset=['Quality Score']).map(color_rsi, subset=['RSI'])
 
         tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["List View", "🚨 Alerts & Breakouts", "📈 Interactive Charts", "🧠 AI Ideas", "📰 Latest News", "🧪 Backtest Engine"])
         link_config = {"Chart": st.column_config.LinkColumn("Chart", display_text="📈 View")}
         
         # Throw a toast notification for top alerts
         if not details_df.empty:
-            alert_count = len(details_df[(details_df['Breakout']) | (details_df['Vol Anomaly'])])
+            alert_df = details_df[
+                ((details_df['Breakout']) | (details_df['Vol Anomaly']) | (details_df['Pullback'])) &
+                (details_df['Risk Tier'].isin(["FRESH", "ESTABLISHED"])) &
+                (details_df['Quality Score'] >= max(min_score, 45))
+            ]
+            alert_count = len(alert_df)
             if alert_count > 0:
                 st.toast(f"🚨 {alert_count} active setups found in {timeframe} timeframe for {'Crypto' if is_crypto else 'Stocks'}!")
                 
@@ -313,7 +340,17 @@ def main():
                 if webhook_url and st.session_state.get("webhook_active", False):
                     # Prevent spamming the webhook
                     try:
-                        message = f"**Trading Dashboard Alert!** 🚨\nFound {alert_count} active setups for {'Crypto' if is_crypto else 'Stocks'} on the `{timeframe}` timeframe."
+                        top_alert_lines = []
+                        for _, r in alert_df.head(3).iterrows():
+                            top_alert_lines.append(
+                                f"- {r['Symbol']} | Tier: {r['Risk Tier']} | Score: {int(r['Quality Score'])} | Flags: {r['Risk Flags']}"
+                            )
+                        details_block = "\n".join(top_alert_lines)
+                        message = (
+                            f"**Trading Dashboard Alert!** 🚨\n"
+                            f"Found {alert_count} qualified setups for {'Crypto' if is_crypto else 'Stocks'} on {timeframe}.\n"
+                            f"{details_block}"
+                        )
                         requests.post(webhook_url, json={"content": message})
                     except:
                         pass
@@ -324,7 +361,7 @@ def main():
         with tab2:
             action_df = details_df[(details_df['Vol Anomaly']) | (details_df['Breakout']) | (details_df['Pullback'])]
             if not action_df.empty:
-                styled_action_df = action_df.style.map(color_score, subset=['Score']).map(color_rsi, subset=['RSI'])
+                styled_action_df = action_df.style.map(color_score, subset=['Quality Score']).map(color_rsi, subset=['RSI'])
                 st.dataframe(styled_action_df, column_config=link_config, width='content', hide_index=True)
             else:
                 st.info("No active setups detected.")
@@ -411,8 +448,16 @@ def main():
             for sym, df in detailed_data.items():
                 if sym in details_df['Symbol'].values:
                     trades, wr, pnl = run_backtest(df, 'Signal_Breakout', hold_period=5)
+                    row_match = details_df[details_df['Symbol'] == sym]
+                    if row_match.empty:
+                        continue
+                    first_row = row_match.iloc[0]
+                    risk_tier = first_row['Risk Tier']
+                    quality_score = first_row['Quality Score']
                     backtest_results.append({
                         "Symbol": sym,
+                        "Risk Tier": risk_tier,
+                        "Quality Score": quality_score,
                         "Historical Trades": trades,
                         "Win Rate (%)": wr,
                         "Total Return (%)": pnl

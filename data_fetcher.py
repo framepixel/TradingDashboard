@@ -31,7 +31,7 @@ def fetch_tradfi_data():
 
 @st.cache_data(ttl=600) # Cache for 10 minutes for active setups
 def fetch_top_binance_movers():
-    """Fetch all USDT pairs, rank by 24h volume and % change."""
+    """Fetch liquid USDT pairs and rank by a balanced anti-pump composite score."""
     try:
         tickers = exchange.fetch_tickers()
         usdt_pairs = []
@@ -44,10 +44,34 @@ def fetch_top_binance_movers():
                     '24h Volume (USDT)': ticker['quoteVolume']
                 })
         df = pd.DataFrame(usdt_pairs)
-        # Filter dust and sort by % change
-        df = df[df['24h Volume (USDT)'] > 1000000] # Min $1M volume
-        top_gainers = df.sort_values(by='24h Change (%)', ascending=False).head(20)
-        return top_gainers
+        if df.empty:
+            return pd.DataFrame()
+
+        # Basic quality filters
+        df = df[(df['24h Volume (USDT)'] > 1000000) & (df['Price'] > 0)] # Min $1M volume
+        if df.empty:
+            return pd.DataFrame()
+
+        # Composite rank to avoid pure pump-chasing behavior.
+        # Favor: high liquidity + positive but not extreme momentum + anti-exhaustion distance.
+        df['LiquidityRank'] = df['24h Volume (USDT)'].rank(pct=True)
+        df['PositiveMomentum'] = df['24h Change (%)'].clip(lower=-5, upper=15)
+        df['MomentumRank'] = df['PositiveMomentum'].rank(pct=True)
+        df['ExtremenessPenalty'] = (df['24h Change (%)'].abs() - 12).clip(lower=0)
+        max_penalty = df['ExtremenessPenalty'].max()
+        if max_penalty > 0:
+            df['ExtremenessPenaltyNorm'] = df['ExtremenessPenalty'] / max_penalty
+        else:
+            df['ExtremenessPenaltyNorm'] = 0.0
+
+        df['CompositeRank'] = (
+            (0.50 * df['LiquidityRank']) +
+            (0.35 * df['MomentumRank']) -
+            (0.15 * df['ExtremenessPenaltyNorm'])
+        )
+
+        candidates = df.sort_values(by='CompositeRank', ascending=False).head(40)
+        return candidates
     except Exception as e:
         st.error(f"Error fetching tickers: {e}")
         return pd.DataFrame()

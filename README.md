@@ -4,8 +4,9 @@ A dashboard with the most interesting Cryptocurrencies and stocks to day trade r
 ## 🚀 Features
 
 - **Market Overview & Broad Equities Support**: Get real-time data for major indices (S&P 500, NASDAQ) and top cryptocurrencies (BTC, ETH) with trend analysis. Also tracks a large universe of highly liquid day trading stocks.
-- **Top Movers & Setups**: Scans Binance for the top 24-hour gainers and movers, and yfinance for top stock movers. Calculates market breadth dynamically.
-- **Technical Pre-Screening & Candlesticks**: Automatically evaluates volume anomalies, breakouts, and pullbacks using Technical Analysis. Now includes VWAP, MACD, Bollinger Bands, ATR, Bullish Pinbars, and Bullish Engulfing patterns.
+- **Top Movers & Setups (Anti-Pump Ranking)**: Scans Binance and ranks liquid symbols with a balanced composite score (liquidity + sustainable momentum - extremeness penalty) instead of pure top-gainer chasing.
+- **Risk-Tiered Technical Pre-Screening**: Evaluates breakouts, pullbacks, and volume anomalies with penalty-aware scoring. Adds Risk Tiers (`FRESH`, `ESTABLISHED`, `EXTENDED`, `EXHAUSTED`) plus risk flags for late-entry detection.
+- **4h Context Bias**: Uses 4h trend and momentum health as a primary safety context for crypto scoring, helping reduce entries that are already overstretched.
 - **AI Trade Ideas**: Generates automated, structured trade ideas and analysis using an integrated Hugging Face AI agent (`Qwen2.5-72B-Instruct`).
 - **Historical Backtesting Engine**: Test technical strategies directly in the app to see historical performance over set hold periods.
 - **Custom Watchlist**: Keep track of your favorite symbols directly in the sidebar with session persistence.
@@ -52,8 +53,8 @@ A dashboard with the most interesting Cryptocurrencies and stocks to day trade r
 - **How to use it**: Use this section right at market open to gauge overall market direction. If the "Top Equity Breadth" metric reads "Bullish Tracker" (over 60% advancing), you generally want to favor long setups.
 
 ### 2. Technical Pre-Screening & Backtesting
-- **What it does**: Scans the market for Volume Anomalies, Breakouts, and Pullbacks. Calculates advanced indicators (VWAP, MACD, ATR) and detects Bullish Pinbars/Engulfing candles. A built-in backtester evaluates the historical win rate of these signals.
-- **How to use it**: Navigate to the "🚨 Anomalies & Breakouts" tab. For any flagged asset, look at the backtest win rate to see if the signal has historical precedence. Use this to quickly filter thousands of pairs down to 3-5 high-probability setups.
+- **What it does**: Scans for volume anomalies, breakouts, and pullbacks with anti-exhaustion penalties (RSI exhaustion, overextension vs EMA20, weak-volume breakouts, and candle-streak heat). Every setup includes a risk tier and risk flags.
+- **How to use it**: In the sidebar, use the Risk Tier filter (default excludes `EXHAUSTED`). Focus on `FRESH` and `ESTABLISHED` setups for safer entries. Use `EXTENDED` selectively and treat risk flags as warning labels.
 
 ### 3. AI Trade Ideas
 - **What it does**: Passes the technical context of a flagged asset to an advanced LLM (`Qwen/Qwen2.5-72B-Instruct` via Hugging Face) to generate a structured trade plan (Trend, Setup, Entry, Stop Loss, Take Profit).

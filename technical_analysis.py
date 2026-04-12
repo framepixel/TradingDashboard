@@ -53,11 +53,28 @@ def _compute_4h_bias(df_4h):
     bias_label = "Bullish" if bias_score >= 8 else "Bearish" if bias_score <= -8 else "Neutral"
     return bias_score, bias_label, bias_flags
 
+def calculate_pivots(df):
+    """Calculates 3-candle fractals to explicitly mark pivot highs and lows"""
+    if df is None or len(df) < 3:
+        return df
+    
+    # Needs 3 candles to define a pivot (prev, current, next)
+    # Pivot High: current high is higher than both prev and next
+    df['Pivot_High'] = (df['high'] > df['high'].shift(1)) & (df['high'] > df['high'].shift(-1))
+    
+    # Pivot Low: current low is lower than both prev and next
+    df['Pivot_Low'] = (df['low'] < df['low'].shift(1)) & (df['low'] < df['low'].shift(-1))
+    
+    return df
+
 def calculate_indicators(df):
     """Calculate EMAs, RSI(14), Volume MA(20), VWAP, MACD, and Bollinger Bands"""
     if df is None or len(df) < 50:
         return df
-    
+
+    # Calculate Pivot Highs and Lows
+    df = calculate_pivots(df)
+
     # EMAs
     df['EMA20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['EMA50'] = df['close'].ewm(span=50, adjust=False).mean()
@@ -111,7 +128,28 @@ def calculate_indicators(df):
                               (df['close'] > df['open']) & \
                               (df['open'] <= df['Prev_Close']) & \
                               (df['close'] >= df['Prev_Open'])
-    
+                              
+    # Bearish Engulfing
+    df['Bearish_Engulfing'] = (df['Prev_Close'] > df['Prev_Open']) & \
+                              (df['close'] < df['open']) & \
+                              (df['open'] >= df['Prev_Close']) & \
+                              (df['close'] <= df['Prev_Open'])
+
+    # Bearish Pinbar / Shooting Star
+    df['Bearish_Pinbar'] = (df['Upper_Wick'] > (2 * df['Body'])) & (df['Lower_Wick'] < df['Body']) & (df['Body'] > 0)
+
+    # Doji
+    df['Doji'] = df['Body'] <= (0.1 * (df['high'] - df['low']))
+
+    # Head and Shoulders (Simplified checking last 3 pivots)
+    df['H_and_S'] = False
+    pivot_indices = df.index[df['Pivot_High']].tolist()
+    for i in range(2, len(pivot_indices)):
+        idx1, idx2, idx3 = pivot_indices[i-2], pivot_indices[i-1], pivot_indices[i]
+        ls, head, rs = df.loc[idx1, 'high'], df.loc[idx2, 'high'], df.loc[idx3, 'high']
+        if head > ls and head > rs and abs(ls - rs) / ls < 0.05:
+            df.loc[idx3, 'H_and_S'] = True
+
     # -----------------------------
     # VECTORIZED STRATEGY SIGNALS (For Backtesting)
     # -----------------------------
@@ -160,117 +198,112 @@ def run_backtest(df, signal_col, hold_period=5):
     win_rate = (wins / trades * 100) if trades > 0 else 0.0
     return trades, win_rate, total_pnl * 100
 
-def analyze_strategy(df, df_4h_bias=None):
-    """Detect setups and return confidence with anti-exhaustion risk controls."""
-    if df is None or len(df) < 25:
+def analyze_strategy(df_w, df_d, df_4h):
+    """Detect setups applying the 4-step constraints (W, D, 4H)."""
+    if df_w is None or df_d is None or df_4h is None:
         return False, False, False, 0, [], "UNKNOWN", [], "Neutral"
-    
-    last = df.iloc[-1]
-    
-    # Volume Anomaly: Volume > 1.5x average (last 20 periods)
-    vol_anomaly = last['volume'] > (1.5 * last['Vol_MA_20'])
-    
-    # Breakout Detection: Price breaks previous resistance (last 20 candles high)
-    past_20_high = df['high'].iloc[-21:-1].max()
-    breakout = last['close'] > past_20_high
-    
-    # Pullback Detection: Uptrend (price > EMA50), pullback to EMA20 or EMA50
-    uptrend = last['close'] > last['EMA50']
-    pullback = uptrend and (last['low'] <= last['EMA20']) and (last['close'] >= last['EMA20'])
-    
-    # Advanced Signal Confidence Score & Tags
+    if len(df_w) < 20 or len(df_d) < 20 or len(df_4h) < 20:
+        return False, False, False, 0, [], "UNKNOWN", [], "Neutral"
+
+    last_w = df_w.iloc[-1]
+    last_d = df_d.iloc[-1]
+    last_4h = df_4h.iloc[-1]
+
+    # Step 1: Trend Alignment (W, D, 4H should be in uptrend for long, or valid criteria)
+    # Assume 50 EMA is trend
+    trend_aligned = (last_w['close'] > last_w['EMA50']) and (last_d['close'] > last_d['EMA50']) and (last_4h['close'] > last_4h['EMA50'])
+
+    # Step 2: AOI Validation (Area of Interest)
+    # Price is near EMA20 or VWAP on Daily or 4H
+    d_emi = (abs(last_d['close'] - last_d['EMA20']) / last_d['EMA20']) < 0.05
+    h4_emi = (abs(last_4h['close'] - last_4h['EMA20']) / last_4h['EMA20']) < 0.05
+    aoi_valid = d_emi or h4_emi
+
+    # Step 3: H&S Alignment
+    # Inverted H&S indicates bullishness, regular H&S implies bearishness. Let's look for H&S status.
+    hs_aligned = (last_d.get('H_and_S', False) == False) and (last_4h.get('H_and_S', False) == False)
+
+    # Step 4: Candlestick Validation
+    candle_valid = (
+        last_d.get('Bullish_Pinbar', False) or last_d.get('Bullish_Engulfing', False) or 
+        last_4h.get('Bullish_Pinbar', False) or last_4h.get('Bullish_Engulfing', False)
+    )
+
     score = 0
     patterns = []
     risk_flags = []
-    
-    # Momentum points
-    if last['MACD'] > last['Signal']:
-        score += 15
-        patterns.append("Bullish MACD")
-    
-    if last['RSI'] < 30:
-        score += 20
-        patterns.append("Oversold (RSI)")
-    elif 30 <= last['RSI'] < 50:
-        score += 10
-        patterns.append("Favorable RSI")
-    elif last['RSI'] > 70:
-        score -= 25
-        risk_flags.append("RSI Exhausted")
-    elif last['RSI'] > 65:
-        score -= 12
-        risk_flags.append("RSI Elevated")
-        
-    # Technical Setup Points
-    if breakout:
-        score += 20
-        patterns.append("Breakout")
-    if pullback:
-        score += 15
-        patterns.append("EMA Pullback")
-    if vol_anomaly:
-        score += 15
-        patterns.append("High Vol")
 
-    # Late-entry and pump-risk penalties
-    recent_high = df['high'].iloc[-21:].max()
-    distance_from_recent_high_pct = ((recent_high - last['close']) / recent_high) * 100 if recent_high > 0 else 100
-    if distance_from_recent_high_pct < 2:
-        score -= 15
-        risk_flags.append("Near Recent High")
+    if trend_aligned: score += 25; patterns.append("Trend Aligned (W/D/4H)")
+    else: risk_flags.append("Trend Mismatch")
 
-    if last['EMA20'] > 0:
-        distance_above_ema20_pct = ((last['close'] - last['EMA20']) / last['EMA20']) * 100
-        if distance_above_ema20_pct > 20:
-            score -= 25
-            risk_flags.append("Too Extended vs EMA20")
-        elif distance_above_ema20_pct > 12:
-            score -= 15
-            risk_flags.append("Extended vs EMA20")
+    if aoi_valid: score += 25; patterns.append("AOI Validation")
+    else: risk_flags.append("Not at AOI")
 
-    green_streak = _consecutive_green_candles(df, lookback=10)
-    if green_streak >= 7:
-        score -= 25
-        risk_flags.append("Exhaustion Candle Streak")
-    elif green_streak >= 5:
-        score -= 15
-        risk_flags.append("Hot Candle Streak")
+    if hs_aligned: score += 25; patterns.append("H&S Clear")
+    else: risk_flags.append("H&S Pattern Present")
 
-    vol_ratio = (last['volume'] / last['Vol_MA_20']) if last['Vol_MA_20'] > 0 else 0
-    if breakout and vol_ratio < 1.2:
-        score -= 20
-        risk_flags.append("Weak Volume Breakout")
-        
-    # Pattern Points
-    if last['Bullish_Pinbar']:
-        score += 20
-        patterns.append("Hammer/Pinbar")
-    if last['Bullish_Engulfing']:
-        score += 20
-        patterns.append("Bull_Engulfing")
-        
-    # VWAP interaction
-    if ('VWAP' in last) and (last['low'] < last['VWAP']) and (last['close'] > last['VWAP']):
-        score += 15
-        patterns.append("VWAP Bounce")
+    if candle_valid: score += 25; patterns.append("Candle Confirm")
+    else: risk_flags.append("No Candle Confirm")
 
-    # 4h context is used as a primary bias for safer selection.
-    bias_label = "Neutral"
-    if df_4h_bias is not None and len(df_4h_bias) >= 60:
-        bias_score, bias_label, bias_flags = _compute_4h_bias(df_4h_bias)
-        score += bias_score
-        risk_flags.extend([flag for flag in bias_flags if "Downtrend" in flag or "Overbought" in flag or "Extended" in flag or "Weak Volume" in flag])
-        patterns.extend([flag for flag in bias_flags if flag in ("4h Uptrend", "4h RSI Healthy")])
-
-    score = max(0, min(100, int(round(score))))
-
-    if any(flag in risk_flags for flag in ("Too Extended vs EMA20", "Exhaustion Candle Streak", "Weak Volume Breakout", "RSI Exhausted")):
-        risk_tier = "EXHAUSTED"
-    elif any(flag in risk_flags for flag in ("Extended vs EMA20", "Hot Candle Streak", "Near Recent High", "RSI Elevated")):
-        risk_tier = "EXTENDED"
-    elif pullback and uptrend and last['RSI'] <= 62:
+    if score == 100:
         risk_tier = "FRESH"
-    else:
+    elif score == 75:
         risk_tier = "ESTABLISHED"
+    elif score == 50:
+        risk_tier = "EXTENDED"
+    else:
+        risk_tier = "EXHAUSTED"
+        
+    bias_label = "Bullish" if score >= 75 else "Neutral" if score >= 50 else "Bearish"
+
+    # Some dummy returns to match old signature: vol_anomaly, breakout, pullback, score, patterns, risk_tier, risk_flags, bias_label
+    vol_anomaly = last_d['volume'] > (1.5 * last_d['Vol_MA_20'])
+    breakout = last_d['close'] > df_d['high'].iloc[-21:-1].max()
+    pullback = aoi_valid
+
+    return vol_anomaly, breakout, pullback, score, patterns, risk_tier, risk_flags, bias_label
+
+def find_aois(df, atr_multiplier=1.5, min_pivots=3):
+    """
+    Find Areas of Interest (AOIs) where clusters of >= min_pivots occur 
+    within a vertical band defined by atr_multiplier * ATR.
+    """
+    if df is None or len(df) < min_pivots or 'ATR' not in df.columns \
+       or 'Pivot_High' not in df.columns or 'Pivot_Low' not in df.columns:
+        return []
+        
+    current_atr = df['ATR'].iloc[-1]
+    if pd.isna(current_atr) or current_atr <= 0:
+        return []
+        
+    band_size = current_atr * atr_multiplier
     
-    return vol_anomaly, breakout, pullback, score, patterns, risk_tier, sorted(set(risk_flags)), bias_label
+    pivot_highs = df.loc[df['Pivot_High'], 'high'].dropna().tolist()
+    pivot_lows = df.loc[df['Pivot_Low'], 'low'].dropna().tolist()
+    all_pivots = sorted(pivot_highs + pivot_lows)
+    
+    aois = []
+    visited = set()
+    
+    for i in range(len(all_pivots)):
+        if i in visited:
+            continue
+            
+        cluster = [all_pivots[i]]
+        current_visited = {i}
+        
+        for j in range(i + 1, len(all_pivots)):
+            if j not in visited and (all_pivots[j] - cluster[0]) <= band_size:
+                cluster.append(all_pivots[j])
+                current_visited.add(j)
+                
+        if len(cluster) >= min_pivots:
+            aois.append({
+                'price_level': sum(cluster) / len(cluster),
+                'top': max(cluster),
+                'bottom': min(cluster),
+                'pivot_count': len(cluster)
+            })
+            visited.update(current_visited)
+            
+    return aois

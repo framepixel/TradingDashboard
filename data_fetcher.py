@@ -87,6 +87,20 @@ def fetch_ohlcv_data(symbol, timeframe='5m', limit=300):
     except Exception as e:
         return None
 
+def fetch_multi_timeframe_data(symbol, timeframes=['1w', '1d', '4h'], limit=300):
+    """Fetch OHLCV data for multiple timeframes."""
+    data = {}
+    for tf in timeframes:
+        data[tf] = fetch_ohlcv_data(symbol, tf, limit)
+    return data
+
+def fetch_stock_multi_timeframe_data(symbol, timeframes=['1w', '1d', '4h'], limit=300):
+    """Fetch OHLCV data for multiple timeframes for a stock."""
+    data = {}
+    for tf in timeframes:
+        data[tf] = fetch_stock_ohlcv_data(symbol, tf, limit)
+    return data
+
 @st.cache_data(ttl=600)
 def fetch_top_stock_movers():
     """Fetch 24h change for a large universe of highly liquid day trading stocks."""
@@ -138,11 +152,15 @@ def fetch_stock_ohlcv_data(symbol, timeframe='5m', limit=300):
     """Fetch OHLCV data for a specific stock"""
     try:
         # Map Crypto timeframes to YFinance timeframes and appropriate period
-        interval_map = {'1m': ('1m', '5d'), '5m': ('5m', '1mo'), '15m': ('15m', '1mo'), '1h': ('1h', '3mo'), '1d': ('1d', '6mo')}
+        interval_map = {'1m': ('1m', '5d'), '5m': ('5m', '1mo'), '15m': ('15m', '1mo'), '1h': ('1h', '3mo'), '4h': ('1h', '1y'), '1d': ('1d', '2y'), '1w': ('1wk', '5y')}
         inv, span = interval_map.get(timeframe, ('5m', '1mo'))
         
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
             hist = yf.Ticker(symbol).history(period=span, interval=inv)
+            if timeframe == '4h' and not hist.empty:
+                # Resample 1h to 4h
+                hist = hist.resample('4h', label='right', closed='right').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
+
         if hist.empty:
             return None
             

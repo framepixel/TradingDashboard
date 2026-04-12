@@ -9,8 +9,10 @@ from data_fetcher import (
     fetch_tradfi_data, 
     fetch_top_binance_movers, 
     fetch_ohlcv_data,
+    fetch_multi_timeframe_data,
     fetch_top_stock_movers,
     fetch_stock_ohlcv_data,
+    fetch_stock_multi_timeframe_data,
     fetch_market_news
 )
 from technical_analysis import calculate_indicators, analyze_strategy, run_backtest
@@ -88,7 +90,6 @@ def get_market_status():
 # ==========================================
 def main():
     st.sidebar.title("⚙️ Settings")
-    timeframe = st.sidebar.radio("Select Timeframe:", ["1m", "5m", "15m", "1h", "4h", "1d", "1w"], index=4)
     min_score = st.sidebar.slider("Minimum Confidence Score", 0, 100, 30, help="Filter setups by technical strength")
     selected_risk_tiers = st.sidebar.multiselect(
         "Risk tiers to include",
@@ -122,8 +123,8 @@ def main():
     calc_symbol = st.sidebar.text_input("Ticker to Calculate", "SPY").upper()
     if st.sidebar.button("Calculate Position Size"):
         try:
-            # We assume the user wants the calculation on their current chosen timeframe
-            df_risk = fetch_stock_ohlcv_data(calc_symbol, timeframe)
+            # We assume the user wants the calculation on a daily timeframe by default
+            df_risk = fetch_stock_ohlcv_data(calc_symbol, '1d')
             if df_risk is not None and not df_risk.empty:
                 df_risk = calculate_indicators(df_risk)
                 current_price = df_risk.iloc[-1]['close']
@@ -196,8 +197,8 @@ def main():
     # --- 1. Market Overview ---
     st.header("📊 Market Overview & Breadth")
     tradfi = fetch_tradfi_data()
-    btc_df = calculate_indicators(fetch_ohlcv_data('BTC/USDT', timeframe))
-    eth_df = calculate_indicators(fetch_ohlcv_data('ETH/USDT', timeframe))
+    btc_df = calculate_indicators(fetch_ohlcv_data('BTC/USDT', '1d'))
+    eth_df = calculate_indicators(fetch_ohlcv_data('ETH/USDT', '1d'))
     
     top_stocks = fetch_top_stock_movers()
     market_breadth = "N/A"
@@ -249,8 +250,8 @@ def main():
     
     asset_tabs = st.tabs(["🪙 Crypto", "📈 Stocks"])
     
-    def render_movers_section(fetch_movers_func, fetch_ohlcv_func, volume_label, is_crypto):
-        with st.spinner(f"Fetching market data ({timeframe})..."):
+    def render_movers_section(fetch_movers_func, fetch_multi_func, volume_label, is_crypto):
+        with st.spinner(f"Fetching market data (1w, 1d, 4h)..."):
             top_pairs = fetch_movers_func()
             
             scan_results = []
@@ -260,18 +261,16 @@ def main():
                 for _, row in top_pairs.iterrows():
                     try:
                         sym = row['Symbol']
-                        df = fetch_ohlcv_func(sym, timeframe)
-                        df_ta = calculate_indicators(df)
+                        multi_data = fetch_multi_func(sym)
+                        df_w = calculate_indicators(multi_data.get('1w'))
+                        df_d = calculate_indicators(multi_data.get('1d'))
+                        df_4h = calculate_indicators(multi_data.get('4h'))
                         
-                        if df_ta is not None and not df_ta.empty and 'EMA50' in df_ta.columns and 'RSI' in df_ta.columns:
-                            detailed_data[sym] = df_ta
-                            df_4h_bias = None
-                            if is_crypto:
-                                raw_4h = fetch_ohlcv_data(sym, timeframe='4h', limit=300)
-                                df_4h_bias = calculate_indicators(raw_4h)
-
-                            vol_anomaly, breakout, pullback, score, patterns, risk_tier, risk_flags, bias_label = analyze_strategy(df_ta, df_4h_bias)
-                            last = df_ta.iloc[-1]
+                        if df_w is not None and df_d is not None and df_4h is not None and not df_w.empty and not df_d.empty and not df_4h.empty and 'EMA50' in df_d.columns and 'RSI' in df_d.columns:
+                            detailed_data[sym] = df_d
+                            
+                            vol_anomaly, breakout, pullback, score, patterns, risk_tier, risk_flags, bias_label = analyze_strategy(df_w, df_d, df_4h)
+                            last = df_d.iloc[-1]
                             
                             chart_link = f"https://www.tradingview.com/chart/?symbol={'BINANCE:' + sym.replace('/', '') if is_crypto else sym}"
                             raw_volume = row.get('24h Volume (USDT)', row.get('24h Volume (USD)', 0))
@@ -286,7 +285,7 @@ def main():
                                 'Uptrend': last['close'] > last['EMA50'],
                                 'Risk Tier': risk_tier,
                                 'Risk Flags': ", ".join(risk_flags) if risk_flags else "-",
-                                '4h Bias': bias_label,
+                                '4h Context': bias_label,
                                 'Raw Volume': raw_volume
                             })
                     except Exception as e:
@@ -333,7 +332,7 @@ def main():
             ]
             alert_count = len(alert_df)
             if alert_count > 0:
-                st.toast(f"🚨 {alert_count} active setups found in {timeframe} timeframe for {'Crypto' if is_crypto else 'Stocks'}!")
+                st.toast(f"🚨 {alert_count} active setups found for {'Crypto' if is_crypto else 'Stocks'}!")
                 
                 # Check webhook
                 webhook_url = st.session_state.get("discord_webhook", "")
@@ -348,7 +347,7 @@ def main():
                         details_block = "\n".join(top_alert_lines)
                         message = (
                             f"**Trading Dashboard Alert!** 🚨\n"
-                            f"Found {alert_count} qualified setups for {'Crypto' if is_crypto else 'Stocks'} on {timeframe}.\n"
+                            f"Found {alert_count} qualified setups for {'Crypto' if is_crypto else 'Stocks'}.\n"
                             f"{details_block}"
                         )
                         requests.post(webhook_url, json={"content": message})
@@ -367,7 +366,7 @@ def main():
                 st.info("No active setups detected.")
             
         with tab3:
-            st.subheader(f"Plotly Charts ({timeframe}) - Top 3 Movers")
+            st.subheader(f"Plotly Charts (Daily) - Top 3 Movers")
             # Show charts for top 3
             top3 = details_df.head(3)['Symbol'].tolist()
             cols = st.columns(3)
@@ -400,13 +399,13 @@ def main():
                     
                     if sym in st.session_state.ai_ideas:
                         st.info(st.session_state.ai_ideas[sym])
-                        if st.button(f"Regenerate Idea", key=f"ai_regen_btn_{sym}_{timeframe}"):
+                        if st.button(f"Regenerate Idea", key=f"ai_regen_btn_{sym}"):
                             with st.spinner("Analyzing..."):
                                 idea = generate_ai_trade_idea(row)
                                 st.session_state.ai_ideas[sym] = idea
                                 st.rerun()
                     else:
-                        if st.button(f"Generate AI Idea", key=f"ai_btn_{sym}_{timeframe}"):
+                        if st.button(f"Generate AI Idea", key=f"ai_btn_{sym}"):
                             with st.spinner("Analyzing..."):
                                 idea = generate_ai_trade_idea(row)
                                 st.session_state.ai_ideas[sym] = idea
@@ -417,7 +416,7 @@ def main():
             if is_crypto:
                 st.markdown("**Search for any cryptocurrency news:**")
                 # Give user the option to check any crypto news, not strictly dependent on top movers
-                news_sym = st.text_input("Crypto Symbol (e.g. BTC-USD, ETH-USD):", value="BTC-USD", key=f"crypto_news_{timeframe}")
+                news_sym = st.text_input("Crypto Symbol (e.g. BTC-USD, ETH-USD):", value="BTC-USD", key=f"crypto_news_1d")
                 news_items = fetch_market_news(news_sym)
                 if news_items:
                     for item in news_items:
@@ -440,7 +439,7 @@ def main():
                     st.info(f"No recent news found for {top_sym}.")
 
         with tab6:
-            st.subheader(f"🧪 Quick Backtester (Current Timeframe: {timeframe})")
+            st.subheader(f"🧪 Quick Backtester (Daily Timeframe)")
             st.markdown("Tests how successful the **Breakout Setup** has been on this ticker historically when holding for 5 candles.")
             
             backtest_results = []
@@ -479,10 +478,10 @@ def main():
                 st.info("Not enough data to run backtests.")
 
     with asset_tabs[0]:
-        render_movers_section(fetch_top_binance_movers, fetch_ohlcv_data, '24h Vol (USDT)', is_crypto=True)
+        render_movers_section(fetch_top_binance_movers, fetch_multi_timeframe_data, '24h Vol (USDT)', is_crypto=True)
         
     with asset_tabs[1]:
-        render_movers_section(fetch_top_stock_movers, fetch_stock_ohlcv_data, '24h Vol (USD)', is_crypto=False)
+        render_movers_section(fetch_top_stock_movers, fetch_stock_multi_timeframe_data, '24h Vol (USD)', is_crypto=False)
 
     st.divider()
 

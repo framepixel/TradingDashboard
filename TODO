@@ -4,5 +4,9 @@
 - Make it so that the logs are not dependent on whether I am in the cryptocurrency or stock section.
 - Make it so that the logs are saved to a file locally to avoid erasure after switch off the streamlit server.
 - Have the dropdown in the logs section automatically detect the ticker and suggest the ticker.
+- Implement the forex section.
+- Fix the watchlist to actually show you the stocks you picked. Or get rid of it.
+- Fix the news not showing up anymore.
+- Add a column to the table that shows whether the movement is news driven or not.
 
 - Implement the custom trading strategy from @fxalexg

@@ -8,6 +8,5 @@
 - Fix the watchlist to actually show you the stocks you picked. Or get rid of it.
 - Fix the news not showing up anymore.
 - Add a column to the table that shows whether the movement is news driven or not.
-- Fix the issue where currently "Trend Aligned" only shows up when the three timeframes have the same trend. It should only be two consecutive timeframes, not necessarily all three.
 
 - Implement the custom trading strategy from @fxalexg

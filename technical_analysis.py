@@ -209,9 +209,22 @@ def analyze_strategy(df_w, df_d, df_4h):
     last_d = df_d.iloc[-1]
     last_4h = df_4h.iloc[-1]
 
-    # Step 1: Trend Alignment (W, D, 4H should be in uptrend for long, or valid criteria)
+    # Step 1: Trend Alignment (W, D, 4H)
     # Assume 50 EMA is trend
-    trend_aligned = (last_w['close'] > last_w['EMA50']) and (last_d['close'] > last_d['EMA50']) and (last_4h['close'] > last_4h['EMA50'])
+    trend_w = "bullish" if last_w['close'] > last_w['EMA50'] else "bearish"
+    trend_d = "bullish" if last_d['close'] > last_d['EMA50'] else "bearish"
+    trend_4h = "bullish" if last_4h['close'] > last_4h['EMA50'] else "bearish"
+
+    if trend_w == trend_d == trend_4h:
+        trend_alignment_str = "Trend Aligned (W/D/4H)"
+    elif trend_w == trend_d:
+        trend_alignment_str = "Trend Aligned (W/D)"
+    elif trend_d == trend_4h:
+        trend_alignment_str = "Trend Aligned (D/4H)"
+    else:
+        trend_alignment_str = None
+
+    trend_aligned = trend_alignment_str is not None
 
     # Step 2: AOI Validation (Area of Interest)
     # Price is near EMA20 or VWAP on Daily or 4H
@@ -233,7 +246,7 @@ def analyze_strategy(df_w, df_d, df_4h):
     patterns = []
     risk_flags = []
 
-    if trend_aligned: score += 25; patterns.append("Trend Aligned (W/D/4H)")
+    if trend_aligned: score += 25; patterns.append(trend_alignment_str)
     else: risk_flags.append("Trend Mismatch")
 
     if aoi_valid: score += 25; patterns.append("AOI Validation")

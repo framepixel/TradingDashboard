@@ -286,7 +286,10 @@ def main():
                             tv_symbol = ('BINANCE:' + sym.replace('/', '')) if is_crypto else sym
                             chart_link = f"https://www.tradingview.com/chart/?symbol={tv_symbol}#{sym}"
                             raw_volume = row.get('24h Volume (USDT)', row.get('24h Volume (USD)', 0))
-                            vol = f"${raw_volume/1e6:.3f}M"
+                            if raw_volume >= 1e9:
+                                vol = f"${raw_volume/1e9:.3f}B"
+                            else:
+                                vol = f"${raw_volume/1e6:.3f}M"
                             
                             scan_results.append({
                                 'Asset': chart_link, 'Symbol': sym, 'Price': row['Price'],

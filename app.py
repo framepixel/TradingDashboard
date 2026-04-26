@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import json
+from typing import Any
 from datetime import datetime, timezone, timedelta, time as dt_time
 import pandas_market_calendars as mcal
 from data_fetcher import (
@@ -271,16 +272,31 @@ def main():
                             
                             vol_anomaly, breakout, pullback, score, patterns, risk_tier, risk_flags, bias_label = analyze_strategy(df_w, df_d, df_4h)
                             last = df_d.iloc[-1]
+
+                            trend_pattern = next((p for p in patterns if p.startswith("Trend Aligned")), None)
+                            if trend_pattern and "(" in trend_pattern and ")" in trend_pattern:
+                                trend_alignment = trend_pattern.split("(", 1)[1].rstrip(")")
+                            else:
+                                trend_alignment = "None"
+
+                            aoi_validation = "AOI Validation" in patterns
+                            hs_aligned = "H&S Aligned" in patterns
+                            candle_confirm = "Candle Confirm" in patterns
                             
-                            chart_link = f"https://www.tradingview.com/chart/?symbol={'BINANCE:' + sym.replace('/', '') if is_crypto else sym}"
+                            tv_symbol = ('BINANCE:' + sym.replace('/', '')) if is_crypto else sym
+                            chart_link = f"https://www.tradingview.com/chart/?symbol={tv_symbol}#{sym}"
                             raw_volume = row.get('24h Volume (USDT)', row.get('24h Volume (USD)', 0))
-                            vol = f"${raw_volume/1e6:.1f}M"
+                            vol = f"${raw_volume/1e6:.3f}M"
                             
                             scan_results.append({
-                                'Chart': chart_link, 'Symbol': sym, 'Price': row['Price'],
+                                'Asset': chart_link, 'Symbol': sym, 'Price': row['Price'],
                                 '24h Change (%)': row['24h Change (%)'], 'Volume': vol,
-                                'Score': score, 'Quality Score': score, 'Patterns': ", ".join(patterns) if patterns else "-",
-                                'RSI': round(last['RSI'], 1), 'MACD_Hist': round(last['MACD_Hist'], 4) if 'MACD_Hist' in last else 0,
+                                'Score': score, 'Quality Score': score,
+                                'RSI': last['RSI'], 'MACD_Hist': last['MACD_Hist'] if 'MACD_Hist' in last else 0,
+                                'Trend Aligned': trend_alignment,
+                                'AOI Validation': aoi_validation,
+                                'H&S Aligned': hs_aligned,
+                                'Candle Confirm': candle_confirm,
                                 'Vol Anomaly': vol_anomaly, 'Breakout': breakout, 'Pullback': pullback,
                                 'Uptrend': last['close'] > last['EMA50'],
                                 'Risk Tier': risk_tier,
@@ -318,10 +334,97 @@ def main():
             color = 'rgba(240, 128, 128, 0.2)' if val >= 70 else 'rgba(144, 238, 144, 0.2)' if val <= 30 else ''
             return f'background-color: {color}'
 
-        styled_df = details_df.style.map(color_score, subset=['Quality Score']).map(color_rsi, subset=['RSI'])
+        bool_cols = {'AOI Validation', 'H&S Aligned', 'Candle Confirm', 'Vol Anomaly', 'Breakout', 'Pullback', 'Uptrend'}
+
+        def format_price(val):
+            if pd.isna(val):
+                return "-"
+            value = float(val)
+            decimals = 6 if 0 < abs(value) < 1 else 3
+            return f"{value:,.{decimals}f}"
+
+        def format_3dp(val):
+            if pd.isna(val):
+                return "-"
+            return f"{float(val):,.3f}"
+
+        def format_quality_score(val):
+            if pd.isna(val):
+                return "-"
+            value = float(val)
+            if value.is_integer():
+                return f"{int(value):,}"
+            return f"{value:,.3f}"
+
+        formatters: dict[str, Any] = {
+            'Price': format_price,
+            '24h Change (%)': format_3dp,
+            'Quality Score': format_quality_score,
+            'RSI': format_3dp,
+            'MACD_Hist': format_3dp,
+        }
+
+        def display_text(col_name, val):
+            if col_name in formatters:
+                return formatters[col_name](val)
+            if col_name in bool_cols:
+                return "True" if bool(val) else "False"
+            if pd.isna(val):
+                return "-"
+            return str(val)
+
+        def adaptive_width(header_label, col_name, series):
+            # Make the column wide enough for the longest displayed string (including header).
+            max_len = len(str(header_label))
+            for value in series:
+                max_len = max(max_len, len(display_text(col_name, value)))
+            # Compact fit: minimal padding while preserving full header/value visibility.
+            return int(max(44, (max_len * 8.0) + 8))
+
+        def build_styler(df):
+            return (
+                df.style
+                .map(color_score, subset=['Quality Score'])
+                .map(color_rsi, subset=['RSI'])
+                .format(formatters)
+                .set_properties(**{'text-align': 'left'})
+                .set_table_styles(
+                    [
+                        {'selector': 'th', 'props': [('text-align', 'left')]},
+                        {'selector': 'td', 'props': [('text-align', 'left')]},
+                    ],
+                    overwrite=False,
+                )
+            )
+
+        display_columns = [
+            'Asset', 'Price', '24h Change (%)', 'Volume', 'Quality Score',
+            'Trend Aligned', 'AOI Validation', 'H&S Aligned', 'Candle Confirm',
+            'RSI', 'MACD_Hist', 'Vol Anomaly', 'Breakout', 'Pullback', 'Uptrend',
+            'Risk Tier', 'Risk Flags', '4h Context'
+        ]
+        list_view_df = details_df[display_columns]
+        styled_df = build_styler(list_view_df)
 
         tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["List View", "🚨 Alerts & Breakouts", "📈 Interactive Charts", "🧠 AI Ideas", "📰 Latest News", "🧪 Backtest Engine"])
-        link_config = {"Chart": st.column_config.LinkColumn("Chart", display_text="📈 View")}
+        column_widths = {
+            col: adaptive_width("Symbol" if col == 'Asset' else col, col, details_df['Symbol'] if col == 'Asset' else list_view_df[col])
+            for col in display_columns
+        }
+        link_config = {
+            "Asset": st.column_config.LinkColumn(
+                "Symbol",
+                display_text=r"https://www\.tradingview\.com/chart/\?symbol=[^#]+#(.+)",
+                width=column_widths['Asset']
+            )
+        }
+        table_column_config = {
+            **link_config,
+            **{
+                col: st.column_config.Column(col, width=column_widths[col])
+                for col in display_columns if col != 'Asset'
+            }
+        }
         
         # Throw a toast notification for top alerts
         if not details_df.empty:
@@ -355,13 +458,14 @@ def main():
                         pass
 
         with tab1:
-            st.dataframe(styled_df, column_config=link_config, width='content', hide_index=True)
+            st.dataframe(styled_df, column_config=table_column_config, width='content', hide_index=True)
             
         with tab2:
             action_df = details_df[(details_df['Vol Anomaly']) | (details_df['Breakout']) | (details_df['Pullback'])]
             if not action_df.empty:
-                styled_action_df = action_df.style.map(color_score, subset=['Quality Score']).map(color_rsi, subset=['RSI'])
-                st.dataframe(styled_action_df, column_config=link_config, width='content', hide_index=True)
+                action_view_df = action_df[display_columns]
+                styled_action_df = build_styler(action_view_df)
+                st.dataframe(styled_action_df, column_config=table_column_config, width='content', hide_index=True)
             else:
                 st.info("No active setups detected.")
             
@@ -395,7 +499,7 @@ def main():
             for idx, (_, row) in enumerate(setup_candidates.iterrows()):
                 with cols[idx]:
                     sym = row['Symbol']
-                    st.markdown(f"### [{sym}]({row['Chart']})")
+                    st.markdown(f"### [{sym}]({row['Asset']})")
                     
                     if sym in st.session_state.ai_ideas:
                         st.info(st.session_state.ai_ideas[sym])

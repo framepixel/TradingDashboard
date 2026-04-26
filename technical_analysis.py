@@ -150,6 +150,14 @@ def calculate_indicators(df):
         if head > ls and head > rs and abs(ls - rs) / ls < 0.05:
             df.loc[idx3, 'H_and_S'] = True
 
+    df['Inv_H_and_S'] = False
+    pivot_low_indices = df.index[df['Pivot_Low']].tolist()
+    for i in range(2, len(pivot_low_indices)):
+        idx1, idx2, idx3 = pivot_low_indices[i-2], pivot_low_indices[i-1], pivot_low_indices[i]
+        ls, head, rs = df.loc[idx1, 'low'], df.loc[idx2, 'low'], df.loc[idx3, 'low']
+        if head < ls and head < rs and abs(ls - rs) / ls < 0.05:
+            df.loc[idx3, 'Inv_H_and_S'] = True
+
     # -----------------------------
     # VECTORIZED STRATEGY SIGNALS (For Backtesting)
     # -----------------------------
@@ -233,14 +241,25 @@ def analyze_strategy(df_w, df_d, df_4h):
     aoi_valid = d_emi or h4_emi
 
     # Step 3: H&S Alignment
-    # Inverted H&S indicates bullishness, regular H&S implies bearishness. Let's look for H&S status.
-    hs_aligned = (last_d.get('H_and_S', False) == False) and (last_4h.get('H_and_S', False) == False)
+    if trend_d == "bullish":
+        hs_aligned = df_d['Inv_H_and_S'].iloc[-6:-1].any() or df_4h['Inv_H_and_S'].iloc[-6:-1].any()
+    else:
+        hs_aligned = df_d['H_and_S'].iloc[-6:-1].any() or df_4h['H_and_S'].iloc[-6:-1].any()
 
     # Step 4: Candlestick Validation
-    candle_valid = (
-        last_d.get('Bullish_Pinbar', False) or last_d.get('Bullish_Engulfing', False) or 
-        last_4h.get('Bullish_Pinbar', False) or last_4h.get('Bullish_Engulfing', False)
-    )
+    last_closed_d = df_d.iloc[-2]
+    last_closed_4h = df_4h.iloc[-2]
+    
+    if trend_d == "bullish":
+        candle_valid = (
+            last_closed_d.get('Bullish_Pinbar', False) or last_closed_d.get('Bullish_Engulfing', False) or 
+            last_closed_4h.get('Bullish_Pinbar', False) or last_closed_4h.get('Bullish_Engulfing', False)
+        )
+    else:
+        candle_valid = (
+            last_closed_d.get('Bearish_Pinbar', False) or last_closed_d.get('Bearish_Engulfing', False) or 
+            last_closed_4h.get('Bearish_Pinbar', False) or last_closed_4h.get('Bearish_Engulfing', False)
+        )
 
     score = 0
     patterns = []
@@ -252,8 +271,8 @@ def analyze_strategy(df_w, df_d, df_4h):
     if aoi_valid: score += 25; patterns.append("AOI Validation")
     else: risk_flags.append("Not at AOI")
 
-    if hs_aligned: score += 25; patterns.append("H&S Clear")
-    else: risk_flags.append("H&S Pattern Present")
+    if hs_aligned: score += 25; patterns.append("H&S Aligned")
+    else: risk_flags.append("H&S Pattern Missing")
 
     if candle_valid: score += 25; patterns.append("Candle Confirm")
     else: risk_flags.append("No Candle Confirm")
@@ -267,7 +286,7 @@ def analyze_strategy(df_w, df_d, df_4h):
     else:
         risk_tier = "EXHAUSTED"
         
-    bias_label = "Bullish" if score >= 75 else "Neutral" if score >= 50 else "Bearish"
+    bias_label = trend_d.capitalize()
 
     # Some dummy returns to match old signature: vol_anomaly, breakout, pullback, score, patterns, risk_tier, risk_flags, bias_label
     vol_anomaly = last_d['volume'] > (1.5 * last_d['Vol_MA_20'])

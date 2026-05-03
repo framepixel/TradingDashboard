@@ -18,6 +18,7 @@ from data_fetcher import (
 )
 from technical_analysis import calculate_indicators, analyze_strategy, run_backtest
 from ai_agent import generate_ai_trade_idea
+from alpaca_trading import get_account_snapshot, get_recent_orders, submit_market_order
 
 # ==========================================
 # PAGE CONFIGURATION & INITIALIZATION
@@ -592,7 +593,97 @@ def main():
 
     st.divider()
 
-    # --- 3. Trade Journal ---
+    # --- 3. Alpaca Trade Execution ---
+    st.header("🦙 Alpaca Trade Execution")
+
+    alpaca_snapshot = get_account_snapshot()
+
+    last_order_result = st.session_state.pop("alpaca_last_order_result", None)
+    if last_order_result:
+        if last_order_result.get("ok"):
+            order = last_order_result.get("order", {})
+            st.success(
+                f"Submitted {order.get('side', 'order')} order for {order.get('symbol', 'unknown symbol')} "
+                f"({order.get('qty', 'n/a')} shares) in {last_order_result.get('mode_label', 'Alpaca')}."
+            )
+        else:
+            st.error(last_order_result.get("error", "Unable to submit Alpaca order."))
+
+    if alpaca_snapshot.get("ok"):
+        if alpaca_snapshot.get("paper"):
+            st.info("Connected to an Alpaca paper trading account.")
+        else:
+            st.warning("Connected to an Alpaca live trading account. Orders will route to the live broker.")
+    else:
+        st.warning(alpaca_snapshot.get("error", "Set ALPACA_API_KEY and ALPACA_API_SECRET to enable trading."))
+
+    def format_money(value):
+        return f"${value:,.2f}" if value is not None else "N/A"
+
+    alpaca_metrics = st.columns(4)
+    alpaca_metrics[0].metric("Account Mode", alpaca_snapshot.get("mode_label", "Unavailable"), "Connected" if alpaca_snapshot.get("ok") else "Disconnected")
+    alpaca_metrics[1].metric("Equity", format_money(alpaca_snapshot.get("equity")), f"Status: {alpaca_snapshot.get('status', 'N/A') or 'N/A'}")
+    alpaca_metrics[2].metric("Buying Power", format_money(alpaca_snapshot.get("buying_power")), f"Currency: {alpaca_snapshot.get('currency', 'USD')}")
+    alpaca_metrics[3].metric("Cash", format_money(alpaca_snapshot.get("cash")), f"Blocked: {'Yes' if alpaca_snapshot.get('trading_blocked') else 'No'}")
+
+    exec_col, history_col = st.columns([1, 1.4])
+
+    with exec_col:
+        st.subheader("Submit Market Order")
+        with st.form("alpaca_order_form"):
+            order_symbol = st.text_input("Symbol", value="AAPL").upper().strip()
+            order_side = st.selectbox("Side", ["BUY", "SELL"])
+            order_qty = st.number_input("Quantity (shares)", min_value=1.0, value=1.0, step=1.0, format="%.2f")
+
+            if alpaca_snapshot.get("ok") and not alpaca_snapshot.get("paper"):
+                live_ack = st.checkbox("I understand this submits LIVE orders.", key="alpaca_live_ack")
+            else:
+                live_ack = True
+
+            can_submit = bool(alpaca_snapshot.get("ok")) and (alpaca_snapshot.get("paper") or live_ack)
+            submit_order = st.form_submit_button("Submit Market Order", disabled=not can_submit)
+
+            if submit_order:
+                result = submit_market_order(order_symbol, order_side, float(order_qty))
+                st.session_state.alpaca_last_order_result = result
+                st.rerun()
+
+        if not alpaca_snapshot.get("ok"):
+            st.caption("The order form stays disabled until Alpaca credentials are available and authenticated.")
+
+    with history_col:
+        st.subheader("Recent Alpaca Orders")
+        recent_orders = get_recent_orders(limit=10)
+        if recent_orders.get("ok"):
+            order_rows = []
+            for order in recent_orders.get("orders", []):
+                submitted_at = order.get("submitted_at")
+                if submitted_at is not None:
+                    submitted_at_text = submitted_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+                else:
+                    submitted_at_text = "-"
+
+                order_rows.append({
+                    "Symbol": order.get("symbol", "-"),
+                    "Side": str(order.get("side", "-")),
+                    "Qty": order.get("qty", "-"),
+                    "Type": order.get("order_type", "-"),
+                    "Status": order.get("status", "-"),
+                    "Filled Avg Price": order.get("filled_avg_price", "-"),
+                    "Submitted At (UTC)": submitted_at_text,
+                })
+
+            orders_df = pd.DataFrame(order_rows)
+            if not orders_df.empty:
+                st.dataframe(orders_df, width='content', hide_index=True)
+            else:
+                st.info("No Alpaca orders found yet.")
+        else:
+            st.warning(recent_orders.get("error", "Unable to load recent Alpaca orders."))
+
+    st.divider()
+
+    # --- 4. Trade Journal ---
     st.header("📓 Trade Journal & Quick Logs")
     with st.expander("Log a New Trade", expanded=False):
         with st.form("trade_form"):

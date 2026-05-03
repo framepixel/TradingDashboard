@@ -6,3 +6,4 @@ huggingface_hub
 plotly
 streamlit-autorefresh
 pandas_market_calendars
+alpaca-py

@@ -18,7 +18,7 @@ from data_fetcher import (
 )
 from technical_analysis import calculate_indicators, analyze_strategy, run_backtest
 from ai_agent import generate_ai_trade_idea
-from alpaca_trading import get_account_snapshot, get_recent_orders, submit_market_order
+from alpaca_trading import close_symbol_position, get_account_snapshot, get_recent_orders, submit_market_order
 
 # ==========================================
 # PAGE CONFIGURATION & INITIALIZATION
@@ -608,12 +608,33 @@ def main():
                 order_size_text = f"${float(order_size_value):,.2f}"
             else:
                 order_size_text = f"{order_size_value} shares"
+            bracket_text = ""
+            tp_value = order.get("take_profit")
+            sl_value = order.get("stop_loss")
+            if tp_value is not None and sl_value is not None:
+                bracket_text = f" | TP: ${float(tp_value):,.2f}, SL: ${float(sl_value):,.2f}"
             st.success(
                 f"Submitted {order.get('side', 'order')} order for {order.get('symbol', 'unknown symbol')} "
-                f"({order_size_text}) in {last_order_result.get('mode_label', 'Alpaca')}."
+                f"({order_size_text}) in {last_order_result.get('mode_label', 'Alpaca')}.{bracket_text}"
             )
         else:
             st.error(last_order_result.get("error", "Unable to submit Alpaca order."))
+
+    last_close_result = st.session_state.pop("alpaca_last_close_result", None)
+    if last_close_result:
+        if last_close_result.get("ok"):
+            close_order = last_close_result.get("order", {})
+            close_qty = close_order.get("qty")
+            if close_qty is None:
+                close_size_text = "full position"
+            else:
+                close_size_text = f"{close_qty} shares"
+            st.success(
+                f"Close-all request sent for {last_close_result.get('symbol', 'symbol')} "
+                f"({close_size_text}) in {last_close_result.get('mode_label', 'Alpaca')}."
+            )
+        else:
+            st.error(last_close_result.get("error", "Unable to close position."))
 
     if alpaca_snapshot.get("ok"):
         if alpaca_snapshot.get("paper"):
@@ -639,6 +660,19 @@ def main():
         with st.form("alpaca_order_form"):
             order_symbol = st.text_input("Symbol", value="AAPL").upper().strip()
             order_side = st.selectbox("Side", ["BUY", "SELL"])
+
+            reference_price = None
+            if order_symbol:
+                try:
+                    ref_df = fetch_stock_ohlcv_data(order_symbol, '1d')
+                    if ref_df is not None and not ref_df.empty:
+                        reference_price = float(ref_df.iloc[-1]['close'])
+                except Exception:
+                    reference_price = None
+
+            if reference_price is not None:
+                st.caption(f"Reference buy price for checks: ${reference_price:,.2f}")
+
             order_size_mode = st.radio("Order size", ["Shares", "USD Notional"], horizontal=True, index=1)
             if order_size_mode == "Shares":
                 order_qty_label = "Quantity (shares)"
@@ -649,6 +683,12 @@ def main():
                 order_qty_label = "Quantity (USD)"
                 order_notional = st.number_input(order_qty_label, min_value=1.0, value=100.0, step=10.0, format="%.2f")
 
+            tp_col, sl_col = st.columns(2)
+            with tp_col:
+                take_profit_input = st.text_input("Take Profit Price (optional)", value="", placeholder="e.g. 110.50")
+            with sl_col:
+                stop_loss_input = st.text_input("Stop Loss Price (optional)", value="", placeholder="e.g. 95.25")
+
             if alpaca_snapshot.get("ok") and not alpaca_snapshot.get("paper"):
                 live_ack = st.checkbox("I understand this submits LIVE orders.", key="alpaca_live_ack")
             else:
@@ -658,13 +698,52 @@ def main():
             submit_order = st.form_submit_button("Submit Market Order", disabled=not can_submit)
 
             if submit_order:
-                result = submit_market_order(
-                    order_symbol,
-                    order_side,
-                    quantity=float(order_qty) if order_qty is not None else None,
-                    notional=float(order_notional) if order_notional is not None else None,
-                )
-                st.session_state.alpaca_last_order_result = result
+                parse_error = None
+                take_profit_price = None
+                stop_loss_price = None
+
+                if take_profit_input.strip():
+                    try:
+                        take_profit_price = float(take_profit_input)
+                    except ValueError:
+                        parse_error = "Take Profit must be a valid number."
+
+                if stop_loss_input.strip() and parse_error is None:
+                    try:
+                        stop_loss_price = float(stop_loss_input)
+                    except ValueError:
+                        parse_error = "Stop Loss must be a valid number."
+
+                if parse_error:
+                    st.error(parse_error)
+                else:
+                    result = submit_market_order(
+                        order_symbol,
+                        order_side,
+                        quantity=float(order_qty) if order_qty is not None else None,
+                        notional=float(order_notional) if order_notional is not None else None,
+                        take_profit=float(take_profit_price) if take_profit_price is not None else None,
+                        stop_loss=float(stop_loss_price) if stop_loss_price is not None else None,
+                        reference_price=reference_price,
+                    )
+                    st.session_state.alpaca_last_order_result = result
+                    st.rerun()
+
+        with st.form("alpaca_close_position_form"):
+            st.markdown("#### Sell All Shares of One Stock")
+            close_symbol = st.text_input("Symbol to close", value="AAPL").upper().strip()
+
+            if alpaca_snapshot.get("ok") and not alpaca_snapshot.get("paper"):
+                close_live_ack = st.checkbox("I understand this closes the full LIVE position.", key="alpaca_close_live_ack")
+            else:
+                close_live_ack = True
+
+            can_close = bool(alpaca_snapshot.get("ok")) and (alpaca_snapshot.get("paper") or close_live_ack)
+            close_all_submit = st.form_submit_button("Sell All (Close Position)", disabled=not can_close)
+
+            if close_all_submit:
+                close_result = close_symbol_position(close_symbol)
+                st.session_state.alpaca_last_close_result = close_result
                 st.rerun()
 
         if not alpaca_snapshot.get("ok"):

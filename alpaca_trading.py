@@ -3,20 +3,28 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
+
+if TYPE_CHECKING:
+    from alpaca.trading.client import TradingClient as TradingClientType
+else:
+    TradingClientType = Any
 
 try:
     from alpaca.trading.client import TradingClient
-    from alpaca.trading.enums import OrderSide, OrderType, QueryOrderStatus, TimeInForce
-    from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
+    from alpaca.trading.enums import OrderClass, OrderSide, OrderType, QueryOrderStatus, TimeInForce
+    from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, StopLossRequest, TakeProfitRequest
 except ImportError:  # pragma: no cover - handled at runtime in the dashboard.
     TradingClient = None
+    OrderClass = None
     OrderSide = None
     OrderType = None
     QueryOrderStatus = None
     TimeInForce = None
     GetOrdersRequest = None
     MarketOrderRequest = None
+    StopLossRequest = None
+    TakeProfitRequest = None
 
 
 ALPACA_API_KEY_ENV = "ALPACA_API_KEY"
@@ -67,8 +75,8 @@ def _format_alpaca_error(exc: Exception) -> str:
         if code == 40310000 or "insufficient buying power" in message.lower():
             if buying_power is not None and cost_basis is not None:
                 return (
-                    f"Insufficient buying power: you have \${buying_power:,.2f} available, "
-                    f"but this order requires about \${cost_basis:,.2f}. Reduce the order size "
+                    f"Insufficient buying power: you have ${buying_power:,.2f} available, "
+                    f"but this order requires about ${cost_basis:,.2f}. Reduce the order size "
                     f"or add funds to the account."
                 )
             return "Insufficient buying power. Reduce the order size or add funds to the account."
@@ -98,13 +106,13 @@ def _require_client_lib() -> None:
         )
 
 
-def _build_client(paper: bool) -> TradingClient:
+def _build_client(paper: bool) -> TradingClientType:
     _require_client_lib()
     api_key, api_secret = _get_credentials()
-    return TradingClient(api_key=api_key, secret_key=api_secret, paper=paper)
+    return cast(Any, TradingClient)(api_key=api_key, secret_key=api_secret, paper=paper)
 
 
-def _resolve_client(preferred_paper: Optional[bool] = None) -> tuple[TradingClient, bool, Any]:
+def _resolve_client(preferred_paper: Optional[bool] = None) -> tuple[TradingClientType, bool, Any]:
     env_paper = _parse_bool(os.environ.get(ALPACA_PAPER_ENV))
 
     candidate_modes = []
@@ -171,6 +179,9 @@ def submit_market_order(
     side: str,
     quantity: Optional[float] = None,
     notional: Optional[float] = None,
+    take_profit: Optional[float] = None,
+    stop_loss: Optional[float] = None,
+    reference_price: Optional[float] = None,
     preferred_paper: Optional[bool] = None,
 ) -> dict[str, Any]:
     try:
@@ -189,9 +200,9 @@ def submit_market_order(
 
         order_kwargs: dict[str, Any] = {
             "symbol": normalized_symbol,
-            "side": OrderSide.BUY if normalized_side == "BUY" else OrderSide.SELL,
-            "type": OrderType.MARKET,
-            "time_in_force": TimeInForce.DAY,
+            "side": cast(Any, OrderSide).BUY if normalized_side == "BUY" else cast(Any, OrderSide).SELL,
+            "type": cast(Any, OrderType).MARKET,
+            "time_in_force": cast(Any, TimeInForce).DAY,
         }
 
         order_size_label = "shares"
@@ -207,7 +218,34 @@ def submit_market_order(
             order_size_label = "notional_usd"
             order_size_value = notional
 
-        order_request = MarketOrderRequest(**order_kwargs)
+        if take_profit is not None:
+            if take_profit <= 0:
+                raise ValueError("Take Profit must be greater than zero.")
+            if reference_price is not None and normalized_side == "BUY" and take_profit <= reference_price:
+                raise ValueError("For BUY orders, Take Profit must be greater than the current buy price.")
+
+        if stop_loss is not None:
+            if stop_loss <= 0:
+                raise ValueError("Stop Loss must be greater than zero.")
+            if reference_price is not None and normalized_side == "BUY" and stop_loss >= reference_price:
+                raise ValueError("For BUY orders, Stop Loss must be lower than the current buy price.")
+
+        if take_profit is not None and stop_loss is not None:
+            if normalized_side == "BUY" and stop_loss >= take_profit:
+                raise ValueError("For BUY orders, Stop Loss must be lower than Take Profit.")
+            if normalized_side == "SELL" and stop_loss <= take_profit:
+                raise ValueError("For SELL orders, Stop Loss must be higher than Take Profit.")
+            order_kwargs["order_class"] = cast(Any, OrderClass).BRACKET
+            order_kwargs["take_profit"] = cast(Any, TakeProfitRequest)(limit_price=take_profit)
+            order_kwargs["stop_loss"] = cast(Any, StopLossRequest)(stop_price=stop_loss)
+        elif take_profit is not None:
+            order_kwargs["order_class"] = cast(Any, OrderClass).OTO
+            order_kwargs["take_profit"] = cast(Any, TakeProfitRequest)(limit_price=take_profit)
+        elif stop_loss is not None:
+            order_kwargs["order_class"] = cast(Any, OrderClass).OTO
+            order_kwargs["stop_loss"] = cast(Any, StopLossRequest)(stop_price=stop_loss)
+
+        order_request = cast(Any, MarketOrderRequest)(**order_kwargs)
         order = client.submit_order(order_request)
 
         return {
@@ -223,6 +261,8 @@ def submit_market_order(
                 "side": getattr(order, "side", normalized_side),
                 "qty": _coerce_float(getattr(order, "qty", quantity)),
                 "notional": _coerce_float(getattr(order, "notional", notional)),
+                "take_profit": take_profit,
+                "stop_loss": stop_loss,
                 "status": getattr(order, "status", None),
                 "type": getattr(order, "type", "market"),
                 "submitted_at": getattr(order, "submitted_at", None),
@@ -242,11 +282,48 @@ def submit_market_order(
         }
 
 
+def close_symbol_position(symbol: str, preferred_paper: Optional[bool] = None) -> dict[str, Any]:
+    try:
+        client, paper, _ = _resolve_client(preferred_paper=preferred_paper)
+
+        normalized_symbol = symbol.strip().upper()
+        if not normalized_symbol:
+            raise ValueError("Symbol is required.")
+
+        close_result = client.close_position(normalized_symbol)
+        return {
+            "ok": True,
+            "paper": paper,
+            "mode_label": "Paper Trading" if paper else "Live Trading",
+            "symbol": normalized_symbol,
+            "order": {
+                "id": getattr(close_result, "id", None),
+                "client_order_id": getattr(close_result, "client_order_id", None),
+                "symbol": getattr(close_result, "symbol", normalized_symbol),
+                "side": getattr(close_result, "side", None),
+                "qty": _coerce_float(getattr(close_result, "qty", None)),
+                "status": getattr(close_result, "status", None),
+                "type": getattr(close_result, "type", None),
+                "submitted_at": getattr(close_result, "submitted_at", None),
+            },
+            "error": None,
+        }
+    except Exception as exc:  # noqa: BLE001 - surfaced to the dashboard.
+        return {
+            "ok": False,
+            "paper": None,
+            "mode_label": "Unavailable",
+            "symbol": symbol,
+            "order": None,
+            "error": _format_alpaca_error(exc),
+        }
+
+
 def get_recent_orders(limit: int = 10, preferred_paper: Optional[bool] = None) -> dict[str, Any]:
     try:
         client, paper, _ = _resolve_client(preferred_paper=preferred_paper)
 
-        request = GetOrdersRequest(limit=limit, status=QueryOrderStatus.ALL)
+        request = cast(Any, GetOrdersRequest)(limit=limit, status=cast(Any, QueryOrderStatus).ALL)
         orders = client.get_orders(filter=request)
 
         order_rows: list[dict[str, Any]] = []

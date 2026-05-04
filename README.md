@@ -79,7 +79,7 @@ A dashboard with the most interesting Cryptocurrencies and stocks to day trade r
 
 ### 5. Alpaca Trade Execution
 - **What it does**: Connects to Alpaca using your environment variables, shows whether the current session is paper or live, displays balance and buying power, and lists the most recent Alpaca orders.
-- **How to use it**: Open the "🦙 Alpaca Trade Execution" section, confirm the detected mode, choose whether to size the order by shares or USD notional, then submit a market order. If the dashboard detects a live account, it requires an explicit confirmation checkbox before submission.
+- **How to use it**: Open the "🦙 Alpaca Trade Execution" section, confirm the detected mode, choose whether to size the order by shares or USD notional, and optionally set a Take Profit and Stop Loss before submitting a market order. You can also use the "Sell All (Close Position)" action to close the full position for a specific stock symbol. If the dashboard detects a live account, it requires an explicit confirmation checkbox before submission.
 
 ### 6. Trade Journal
 - **What it does**: A built-in, local session log to record your executed trades. 

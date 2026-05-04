@@ -75,8 +75,8 @@ def _format_alpaca_error(exc: Exception) -> str:
         if code == 40310000 or "insufficient buying power" in message.lower():
             if buying_power is not None and cost_basis is not None:
                 return (
-                    f"Insufficient buying power: you have ${buying_power:,.2f} available, "
-                    f"but this order requires about ${cost_basis:,.2f}. Reduce the order size "
+                    f"Insufficient buying power: you have \${buying_power:,.2f} available, "
+                    f"but this order requires about \${cost_basis:,.2f}. Reduce the order size "
                     f"or add funds to the account."
                 )
             return "Insufficient buying power. Reduce the order size or add funds to the account."

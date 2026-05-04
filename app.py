@@ -602,9 +602,15 @@ def main():
     if last_order_result:
         if last_order_result.get("ok"):
             order = last_order_result.get("order", {})
+            order_size_label = last_order_result.get("order_size_label", "shares")
+            order_size_value = last_order_result.get("order_size_value", order.get("qty", "n/a"))
+            if order_size_label == "notional_usd":
+                order_size_text = f"${float(order_size_value):,.2f}"
+            else:
+                order_size_text = f"{order_size_value} shares"
             st.success(
                 f"Submitted {order.get('side', 'order')} order for {order.get('symbol', 'unknown symbol')} "
-                f"({order.get('qty', 'n/a')} shares) in {last_order_result.get('mode_label', 'Alpaca')}."
+                f"({order_size_text}) in {last_order_result.get('mode_label', 'Alpaca')}."
             )
         else:
             st.error(last_order_result.get("error", "Unable to submit Alpaca order."))
@@ -633,7 +639,15 @@ def main():
         with st.form("alpaca_order_form"):
             order_symbol = st.text_input("Symbol", value="AAPL").upper().strip()
             order_side = st.selectbox("Side", ["BUY", "SELL"])
-            order_qty = st.number_input("Quantity (shares)", min_value=1.0, value=1.0, step=1.0, format="%.2f")
+            order_size_mode = st.radio("Order size", ["Shares", "USD Notional"], horizontal=True, index=1)
+            if order_size_mode == "Shares":
+                order_qty_label = "Quantity (shares)"
+                order_qty = st.number_input(order_qty_label, min_value=1.0, value=1.0, step=1.0, format="%.2f")
+                order_notional = None
+            else:
+                order_qty = None
+                order_qty_label = "Quantity (USD)"
+                order_notional = st.number_input(order_qty_label, min_value=1.0, value=100.0, step=10.0, format="%.2f")
 
             if alpaca_snapshot.get("ok") and not alpaca_snapshot.get("paper"):
                 live_ack = st.checkbox("I understand this submits LIVE orders.", key="alpaca_live_ack")
@@ -644,7 +658,12 @@ def main():
             submit_order = st.form_submit_button("Submit Market Order", disabled=not can_submit)
 
             if submit_order:
-                result = submit_market_order(order_symbol, order_side, float(order_qty))
+                result = submit_market_order(
+                    order_symbol,
+                    order_side,
+                    quantity=float(order_qty) if order_qty is not None else None,
+                    notional=float(order_notional) if order_notional is not None else None,
+                )
                 st.session_state.alpaca_last_order_result = result
                 st.rerun()
 
@@ -667,6 +686,7 @@ def main():
                     "Symbol": order.get("symbol", "-"),
                     "Side": str(order.get("side", "-")),
                     "Qty": order.get("qty", "-"),
+                    "Notional": order.get("notional", "-"),
                     "Type": order.get("order_type", "-"),
                     "Status": order.get("status", "-"),
                     "Filled Avg Price": order.get("filled_avg_price", "-"),

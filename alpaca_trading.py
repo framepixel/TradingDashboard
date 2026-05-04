@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -43,6 +44,39 @@ def _coerce_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _format_alpaca_error(exc: Exception) -> str:
+    raw_message = str(exc).strip()
+    parsed_payload: dict[str, Any] | None = None
+
+    if raw_message.startswith("{") and raw_message.endswith("}"):
+        try:
+            loaded = json.loads(raw_message)
+            if isinstance(loaded, dict):
+                parsed_payload = loaded
+        except json.JSONDecodeError:
+            parsed_payload = None
+
+    if parsed_payload:
+        message = str(parsed_payload.get("message", raw_message)).strip()
+        code = parsed_payload.get("code")
+        buying_power = _coerce_float(parsed_payload.get("buying_power"))
+        cost_basis = _coerce_float(parsed_payload.get("cost_basis"))
+
+        if code == 40310000 or "insufficient buying power" in message.lower():
+            if buying_power is not None and cost_basis is not None:
+                return (
+                    f"Insufficient buying power: you have \${buying_power:,.2f} available, "
+                    f"but this order requires about \${cost_basis:,.2f}. Reduce the order size "
+                    f"or add funds to the account."
+                )
+            return "Insufficient buying power. Reduce the order size or add funds to the account."
+
+        if message:
+            return message
+
+    return raw_message or "An unexpected Alpaca error occurred."
 
 
 def _get_credentials() -> tuple[str, str]:
@@ -128,14 +162,15 @@ def get_account_snapshot(preferred_paper: Optional[bool] = None) -> dict[str, An
             "trading_blocked": False,
             "account_blocked": False,
             "multiplier": None,
-            "error": str(exc),
+            "error": _format_alpaca_error(exc),
         }
 
 
 def submit_market_order(
     symbol: str,
     side: str,
-    quantity: float,
+    quantity: Optional[float] = None,
+    notional: Optional[float] = None,
     preferred_paper: Optional[bool] = None,
 ) -> dict[str, Any]:
     try:
@@ -147,28 +182,47 @@ def submit_market_order(
             raise ValueError("Side must be BUY or SELL.")
         if not normalized_symbol:
             raise ValueError("Symbol is required.")
-        if quantity <= 0:
-            raise ValueError("Quantity must be greater than zero.")
+        if quantity is not None and notional is not None:
+            raise ValueError("Provide either quantity or notional, not both.")
+        if quantity is None and notional is None:
+            raise ValueError("Provide either quantity or notional.")
 
-        order_request = MarketOrderRequest(
-            symbol=normalized_symbol,
-            qty=quantity,
-            side=OrderSide.BUY if normalized_side == "BUY" else OrderSide.SELL,
-            type=OrderType.MARKET,
-            time_in_force=TimeInForce.DAY,
-        )
+        order_kwargs: dict[str, Any] = {
+            "symbol": normalized_symbol,
+            "side": OrderSide.BUY if normalized_side == "BUY" else OrderSide.SELL,
+            "type": OrderType.MARKET,
+            "time_in_force": TimeInForce.DAY,
+        }
+
+        order_size_label = "shares"
+        if quantity is not None:
+            if quantity <= 0:
+                raise ValueError("Quantity must be greater than zero.")
+            order_kwargs["qty"] = quantity
+            order_size_value = quantity
+        else:
+            if notional is None or notional <= 0:
+                raise ValueError("Notional amount must be greater than zero.")
+            order_kwargs["notional"] = notional
+            order_size_label = "notional_usd"
+            order_size_value = notional
+
+        order_request = MarketOrderRequest(**order_kwargs)
         order = client.submit_order(order_request)
 
         return {
             "ok": True,
             "paper": paper,
             "mode_label": "Paper Trading" if paper else "Live Trading",
+            "order_size_label": order_size_label,
+            "order_size_value": order_size_value,
             "order": {
                 "id": getattr(order, "id", None),
                 "client_order_id": getattr(order, "client_order_id", None),
                 "symbol": getattr(order, "symbol", normalized_symbol),
                 "side": getattr(order, "side", normalized_side),
                 "qty": _coerce_float(getattr(order, "qty", quantity)),
+                "notional": _coerce_float(getattr(order, "notional", notional)),
                 "status": getattr(order, "status", None),
                 "type": getattr(order, "type", "market"),
                 "submitted_at": getattr(order, "submitted_at", None),
@@ -181,8 +235,10 @@ def submit_market_order(
             "ok": False,
             "paper": None,
             "mode_label": "Unavailable",
+            "order_size_label": None,
+            "order_size_value": None,
             "order": None,
-            "error": str(exc),
+            "error": _format_alpaca_error(exc),
         }
 
 
@@ -206,6 +262,7 @@ def get_recent_orders(limit: int = 10, preferred_paper: Optional[bool] = None) -
                     "symbol": getattr(order, "symbol", None),
                     "side": getattr(order, "side", None),
                     "qty": _coerce_float(getattr(order, "qty", None)),
+                    "notional": _coerce_float(getattr(order, "notional", None)),
                     "order_type": getattr(order, "type", None),
                     "status": getattr(order, "status", None),
                     "submitted_at": submitted_at,
@@ -230,5 +287,5 @@ def get_recent_orders(limit: int = 10, preferred_paper: Optional[bool] = None) -
             "paper": None,
             "mode_label": "Unavailable",
             "orders": [],
-            "error": str(exc),
+            "error": _format_alpaca_error(exc),
         }
